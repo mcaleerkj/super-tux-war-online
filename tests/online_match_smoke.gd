@@ -35,6 +35,14 @@ func _run() -> void:
 	var guest := session.call("get_character", NetworkProtocol.GUEST_PEER_ID) as CharacterController
 	_expect(host != null and host.is_locally_controlled(), "host owns the local character")
 	_expect(guest != null and guest.control_source == CharacterController.ControlSource.REMOTE_INPUT, "host simulates guest input")
+	var replica := CharacterController.new()
+	replica.control_source = CharacterController.ControlSource.REPLICA
+	get_tree().root.add_child(replica)
+	replica.visuals.start_spawn_animation()
+	replica._update_replica(CharacterVisuals.SPAWN_FADE_DURATION * 0.5)
+	_expect(replica.modulate.a > 0.0, "remote replica advances its respawn fade")
+	replica.queue_free()
+	await get_tree().process_frame
 	# On the host, the game-over UI is constructed while NetworkSession is
 	# still PLAYING/LOADING and before its match-ended listener switches to
 	# ENDED. It must nevertheless expose the online actions.

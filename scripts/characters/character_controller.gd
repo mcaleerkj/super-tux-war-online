@@ -299,7 +299,10 @@ func _clear_transient_input() -> void:
 		_buffered_input["jump_pressed"] = false
 		_buffered_input["jump_released"] = false
 
-func _update_replica(_delta: float) -> void:
+func _update_replica(delta: float) -> void:
+	# Replica characters skip the normal physics path, so advance their spawn
+	# fade here or a remote respawn remains permanently transparent.
+	visuals.update_spawn_animation(delta)
 	if _replica_snapshots.is_empty():
 		return
 	var newest_tick := int(_replica_snapshots[-1].get("tick", 0))
