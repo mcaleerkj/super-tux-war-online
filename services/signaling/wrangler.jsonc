@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "super-tux-war-signaling",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "observability": { "enabled": true },
+  "vars": {
+    "ALLOWED_ORIGINS": "http://127.0.0.1,http://localhost"
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOMS", "class_name": "GameRoom" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["GameRoom"] }
+  ],
+  "ratelimits": [
+    {
+      "name": "CREATE_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 5, "period": 60 }
+    },
+    {
+      "name": "JOIN_RATE_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 20, "period": 60 }
+    }
+  ]
+}

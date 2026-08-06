@@ -1,0 +1,252 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/online_lobby.gd" id="1_script"]
+[ext_resource type="Theme" uid="uid://cc60i0866epm4" path="res://assets/ui/menu_theme.tres" id="2_theme"]
+
+[node name="OnlineLobby" type="Control"]
+process_mode = 3
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme = ExtResource("2_theme")
+script = ExtResource("1_script")
+
+[node name="Dim" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.86)
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="Center"]
+custom_minimum_size = Vector2(680, 590)
+layout_mode = 2
+
+[node name="MainVBox" type="VBoxContainer" parent="Center/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="Center/Panel/MainVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 34
+text = "Online Friend Match"
+horizontal_alignment = 1
+
+[node name="StatusLabel" type="Label" parent="Center/Panel/MainVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Create a room or join your friend's code."
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="SetupView" type="VBoxContainer" parent="Center/Panel/MainVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="Notice" type="Label" parent="Center/Panel/MainVBox/SetupView"]
+layout_mode = 2
+text = "Two players • Frag Limit • Keep this browser window active"
+horizontal_alignment = 1
+
+[node name="CreateButton" type="Button" parent="Center/Panel/MainVBox/SetupView"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(300, 52)
+layout_mode = 2
+size_flags_horizontal = 4
+text = "Create Private Room"
+
+[node name="Or" type="Label" parent="Center/Panel/MainVBox/SetupView"]
+layout_mode = 2
+text = "— or join a friend —"
+horizontal_alignment = 1
+
+[node name="JoinRow" type="HBoxContainer" parent="Center/Panel/MainVBox/SetupView"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 10
+
+[node name="RoomCodeInput" type="LineEdit" parent="Center/Panel/MainVBox/SetupView/JoinRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(250, 48)
+layout_mode = 2
+placeholder_text = "ROOM CODE"
+max_length = 8
+alignment = 1
+
+[node name="JoinButton" type="Button" parent="Center/Panel/MainVBox/SetupView/JoinRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 48)
+layout_mode = 2
+disabled = true
+text = "Join"
+
+[node name="BackButton" type="Button" parent="Center/Panel/MainVBox/SetupView"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(180, 44)
+layout_mode = 2
+size_flags_horizontal = 4
+text = "Back"
+
+[node name="LobbyView" type="VBoxContainer" parent="Center/Panel/MainVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 12
+
+[node name="CodeTitle" type="Label" parent="Center/Panel/MainVBox/LobbyView"]
+layout_mode = 2
+text = "ROOM CODE"
+horizontal_alignment = 1
+
+[node name="CodeRow" type="HBoxContainer" parent="Center/Panel/MainVBox/LobbyView"]
+layout_mode = 2
+alignment = 1
+
+[node name="RoomCodeLabel" type="Label" parent="Center/Panel/MainVBox/LobbyView/CodeRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 52)
+layout_mode = 2
+theme_override_font_sizes/font_size = 32
+text = "--------"
+horizontal_alignment = 1
+
+[node name="CopyButton" type="Button" parent="Center/Panel/MainVBox/LobbyView/CodeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Copy"
+
+[node name="ConnectionLabel" type="Label" parent="Center/Panel/MainVBox/LobbyView"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Waiting for friend..."
+horizontal_alignment = 1
+
+[node name="Players" type="HBoxContainer" parent="Center/Panel/MainVBox/LobbyView"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 40
+
+[node name="HostLabel" type="Label" parent="Center/Panel/MainVBox/LobbyView/Players"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 36)
+layout_mode = 2
+text = "Host: Tux"
+horizontal_alignment = 1
+
+[node name="GuestLabel" type="Label" parent="Center/Panel/MainVBox/LobbyView/Players"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 36)
+layout_mode = 2
+text = "Friend: Beasty"
+horizontal_alignment = 1
+
+[node name="CharacterRow" type="HBoxContainer" parent="Center/Panel/MainVBox/LobbyView"]
+layout_mode = 2
+alignment = 1
+
+[node name="PrevOnlineCharacter" type="Button" parent="Center/Panel/MainVBox/LobbyView/CharacterRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "<"
+
+[node name="CharacterLabel" type="Label" parent="Center/Panel/MainVBox/LobbyView/CharacterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(220, 40)
+layout_mode = 2
+text = "Tux"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="NextOnlineCharacter" type="Button" parent="Center/Panel/MainVBox/LobbyView/CharacterRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = ">"
+
+[node name="CharacterHint" type="Label" parent="Center/Panel/MainVBox/LobbyView"]
+layout_mode = 2
+text = "Your character"
+horizontal_alignment = 1
+
+[node name="LevelRow" type="HBoxContainer" parent="Center/Panel/MainVBox/LobbyView"]
+layout_mode = 2
+alignment = 1
+
+[node name="PrevOnlineLevel" type="Button" parent="Center/Panel/MainVBox/LobbyView/LevelRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "<"
+
+[node name="LevelLabel" type="Label" parent="Center/Panel/MainVBox/LobbyView/LevelRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(220, 40)
+layout_mode = 2
+text = "Level01"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="NextOnlineLevel" type="Button" parent="Center/Panel/MainVBox/LobbyView/LevelRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = ">"
+
+[node name="GoalRow" type="HBoxContainer" parent="Center/Panel/MainVBox/LobbyView"]
+layout_mode = 2
+alignment = 1
+
+[node name="MinusOnlineGoal" type="Button" parent="Center/Panel/MainVBox/LobbyView/GoalRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "−"
+
+[node name="GoalLabel" type="Label" parent="Center/Panel/MainVBox/LobbyView/GoalRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(220, 40)
+layout_mode = 2
+text = "10 frags"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="PlusOnlineGoal" type="Button" parent="Center/Panel/MainVBox/LobbyView/GoalRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "+"
+
+[node name="ActionRow" type="HBoxContainer" parent="Center/Panel/MainVBox/LobbyView"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 12
+
+[node name="ReadyButton" type="Button" parent="Center/Panel/MainVBox/LobbyView/ActionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 48)
+layout_mode = 2
+text = "Ready"
+
+[node name="StartOnlineButton" type="Button" parent="Center/Panel/MainVBox/LobbyView/ActionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(170, 48)
+layout_mode = 2
+disabled = true
+text = "Start Match"
+
+[node name="LeaveButton" type="Button" parent="Center/Panel/MainVBox/LobbyView/ActionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 48)
+layout_mode = 2
+text = "Leave"

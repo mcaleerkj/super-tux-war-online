@@ -1,0 +1,4 @@
+{
+  "signaling_base_url": "http://127.0.0.1:8787",
+  "allowed_local_origins": ["http://127.0.0.1", "http://localhost"]
+}

@@ -1,0 +1,89 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/options_popup.gd" id="1_options_script"]
+[ext_resource type="Theme" path="res://assets/ui/menu_theme.tres" id="2_theme"]
+
+[node name="OptionsPopup" type="AcceptDialog"]
+title = "Options"
+initial_position = 2
+size = Vector2i(480, 300)
+ok_button_text = "Done"
+dialog_hide_on_ok = true
+theme = ExtResource("2_theme")
+script = ExtResource("1_options_script")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 464.0
+offset_bottom = 251.0
+theme_override_constants/separation = 16
+
+[node name="MasterRow" type="HBoxContainer" parent="VBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="MasterLabel" type="Label" parent="VBox/MasterRow"]
+custom_minimum_size = Vector2(110, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Master"
+
+[node name="MasterSlider" type="HSlider" parent="VBox/MasterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.05
+value = 1.0
+
+[node name="MusicRow" type="HBoxContainer" parent="VBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="MusicLabel" type="Label" parent="VBox/MusicRow"]
+custom_minimum_size = Vector2(110, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Music"
+
+[node name="MusicSlider" type="HSlider" parent="VBox/MusicRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.05
+value = 0.8
+
+[node name="SfxRow" type="HBoxContainer" parent="VBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="SfxLabel" type="Label" parent="VBox/SfxRow"]
+custom_minimum_size = Vector2(110, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Sound FX"
+
+[node name="SfxSlider" type="HSlider" parent="VBox/SfxRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.05
+value = 1.0
+
+[node name="Separator" type="HSeparator" parent="VBox"]
+layout_mode = 2
+
+[node name="MuteCheck" type="CheckButton" parent="VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Mute all  (M)"

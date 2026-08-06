@@ -1,0 +1,57 @@
+extends Node
+
+var _failures := 0
+
+func _ready() -> void:
+	# Keep the runner alive when GameStateManager replaces the current scene.
+	get_tree().current_scene = null
+	_run.call_deferred()
+
+func _run() -> void:
+	var config := {
+		"protocol_version": NetworkProtocol.VERSION,
+		"mode_id": "frag",
+		"level_id": "level01",
+		"goal": 3,
+		"participants": [
+			{"peer_id": 1, "character_id": "tux", "color_slot": 0},
+			{"peer_id": 2, "character_id": "gopher", "color_slot": 1},
+		],
+	}
+	var session := get_tree().root.get_node("NetworkSession")
+	var game_state := get_tree().root.get_node("GameStateManager")
+	session.set("local_peer_id", NetworkProtocol.HOST_PEER_ID)
+	session.set("state", 5) # NetworkSession.SessionState.LOADING
+	session.set("_current_match", config.duplicate(true))
+	await game_state.call("start_online_match", config)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	var characters := get_tree().get_nodes_in_group("characters")
+	_expect(characters.size() == 2, "online roster spawns exactly two humans")
+	_expect(get_tree().get_nodes_in_group("human_players").size() == 2, "both online actors are marked human")
+	_expect(get_tree().get_nodes_in_group("game_mode").size() == 1, "online match creates one mode")
+	var host := session.call("get_character", NetworkProtocol.HOST_PEER_ID) as CharacterController
+	var guest := session.call("get_character", NetworkProtocol.GUEST_PEER_ID) as CharacterController
+	_expect(host != null and host.is_locally_controlled(), "host owns the local character")
+	_expect(guest != null and guest.control_source == CharacterController.ControlSource.REMOTE_INPUT, "host simulates guest input")
+	# On the host, the game-over UI is constructed while NetworkSession is
+	# still PLAYING/LOADING and before its match-ended listener switches to
+	# ENDED. It must nevertheless expose the online actions.
+	var game_over := load("res://scenes/ui/game_over_scoreboard.tscn").instantiate() as Control
+	get_tree().root.add_child(game_over)
+	var rematch_button := game_over.get_node("%RestartButton") as Button
+	var lobby_button := game_over.get_node("%LobbyButton") as Button
+	_expect(rematch_button.text == "Rematch", "host game-over screen offers an online rematch")
+	_expect(lobby_button.visible, "host game-over screen offers lobby settings")
+	game_over.queue_free()
+	await get_tree().process_frame
+	if _failures == 0:
+		print("[Tests] online match smoke test passed")
+	get_tree().quit(_failures)
+
+func _expect(condition: bool, description: String) -> void:
+	if condition:
+		return
+	_failures += 1
+	push_error("[Tests] FAILED: %s" % description)

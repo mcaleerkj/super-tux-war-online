@@ -1,0 +1,16 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/objects/koth_zone.gd" id="1_zone_script"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_zone"]
+size = Vector2(128, 100)
+
+[node name="KothZone" type="Area2D"]
+collision_layer = 8
+collision_mask = 2
+z_index = 4
+script = ExtResource("1_zone_script")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+position = Vector2(0, -46)
+shape = SubResource("RectangleShape2D_zone")

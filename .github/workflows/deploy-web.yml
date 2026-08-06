@@ -1,0 +1,96 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    tags:
+      - '*'
+
+env:
+  GODOT_VERSION: 4.7.1
+  EXPORT_NAME: super-tux-war
+  PROJECT_PATH: .
+
+jobs:
+  deploy-signaling:
+    name: Deploy signaling service
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/signaling
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: services/signaling/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - name: Deploy Worker
+        run: |
+          test -n "$GAME_ORIGIN"
+          npm run deploy -- --var "ALLOWED_ORIGINS:$GAME_ORIGIN"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GAME_ORIGIN: ${{ vars.GAME_ORIGIN }}
+
+  export-web:
+    name: Web Export
+    needs: deploy-signaling
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Godot
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          unzip -q Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          chmod +x Godot_v${GODOT_VERSION}-stable_linux.x86_64
+          mkdir -p ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz
+          unzip -q Godot_v${GODOT_VERSION}-stable_export_templates.tpz
+          mv templates/* ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/
+
+      - name: Import Assets
+        run: |
+          ./Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --verbose --editor --quit
+
+      - name: Configure online service
+        env:
+          SIGNALING_BASE_URL: ${{ vars.SIGNALING_BASE_URL }}
+        run: |
+          test -n "$SIGNALING_BASE_URL"
+          node -e 'const fs=require("fs"); const p="network_config.json"; const c=JSON.parse(fs.readFileSync(p,"utf8")); c.signaling_base_url=process.env.SIGNALING_BASE_URL.replace(/\/$/,""); fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n")'
+
+      - name: Build Web
+        run: |
+          mkdir -p build/web/game
+          ./Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --verbose --export-release "Web" build/web/game/index.html
+
+      - name: Add wrapper
+        run: |
+          cp .github/workflows/godot-wrapper.html build/web/index.html
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

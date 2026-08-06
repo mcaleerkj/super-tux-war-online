@@ -1,0 +1,259 @@
+extends Node
+
+## Manages character spawning and respawn point selection.
+##
+## Handles initial spawn of player and NPCs with selected character skins,
+## assigns unique colors to NPCs, and provides respawn positions that avoid
+## placing characters too close to each other.
+
+const PLAYER_SCENE := preload("res://scenes/characters/player_character.tscn")
+const NPC_SCENE := preload("res://scenes/characters/npc_character.tscn")
+
+const SAFE_SPAWN_DISTANCE := GameConstants.TILE_SIZE * 4.0
+
+# Color palette for CPU characters
+const CPU_COLORS := [
+	Color(1.0, 1.0, 1.0),      # 0: White (default/original color)
+	Color(0.2, 0.2, 0.2),      # 1: Black/Dark Gray
+	Color(0.3, 0.3, 1.0),      # 2: Blue
+	Color(0.3, 1.0, 0.3),      # 3: Green
+	Color(1.0, 1.0, 0.3),      # 4: Yellow
+	Color(1.0, 0.5, 0.0),      # 5: Orange
+	Color(0.8, 0.3, 1.0),      # 6: Purple
+	Color(0.3, 1.0, 1.0),      # 7: Cyan
+]
+
+var _spawn_points: Array[SpawnPoint] = []
+var _last_point_by_id: Dictionary = {}   # character RID (int) -> SpawnPoint
+
+func _ready() -> void:
+	add_to_group("spawn_manager")
+	_collect_spawn_points()
+	if has_node("/root/NetworkSession") and NetworkSession.is_online_match():
+		return  # GameStateManager supplies the synchronized two-player roster.
+	_initial_spawn()
+
+
+func _collect_spawn_points() -> void:
+	_spawn_points.clear()
+	for node in get_tree().get_nodes_in_group("spawn_points"):
+		var sp := node as SpawnPoint
+		if sp != null:
+			_spawn_points.append(sp)
+	_spawn_points.sort_custom(func(a: SpawnPoint, b: SpawnPoint) -> bool: return str(a.get_path()) < str(b.get_path()))
+
+func spawn_online_roster(config: Dictionary) -> Dictionary:
+	var spawned: Dictionary = {}
+	if not NetworkProtocol.validate_match_config(config):
+		push_error("SpawnManager: rejected invalid online match config")
+		return spawned
+	if _spawn_points.size() < 2:
+		push_error("SpawnManager: online matches require at least two spawn points")
+		return spawned
+
+	var participants: Array = config.get("participants", [])
+	participants.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a.peer_id) < int(b.peer_id))
+	for index in participants.size():
+		var participant: Dictionary = participants[index]
+		var peer_id := int(participant.get("peer_id", 0))
+		var source := CharacterController.ControlSource.REPLICA
+		if peer_id == NetworkSession.local_peer_id:
+			source = CharacterController.ControlSource.LOCAL_HUMAN
+		elif NetworkSession.is_host():
+			source = CharacterController.ControlSource.REMOTE_INPUT
+
+		var character := PLAYER_SCENE.instantiate() as CharacterController
+		character.configure_participant(
+			peer_id,
+			source,
+			str(participant.get("character_id", "tux")),
+			int(participant.get("color_slot", index))
+		)
+		character.global_position = _spawn_points[index].global_position
+		character.character_color = Color.WHITE if peer_id == NetworkProtocol.HOST_PEER_ID else Color(0.35, 0.85, 1.0)
+		get_parent().add_child(character)
+		character.load_character_animations(character.character_asset_name)
+		var sprite := character.get_node_or_null("AnimatedSprite2D") as AnimatedSprite2D
+		if sprite:
+			sprite.modulate = character.character_color
+		_last_point_by_id[character.get_instance_id()] = _spawn_points[index]
+		spawned[peer_id] = character
+	return spawned
+
+
+func _initial_spawn() -> void:
+	# Clear any already placed Player/NPC children (in case level still has them)
+	for child in get_children():
+		if child is CharacterBody2D:
+			child.queue_free()
+	# Wait 2 frames to ensure all characters are fully freed
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	# Get selected characters from GameSettings
+	var player_character := "tux"
+	var cpu_character := "beasty"
+	if has_node("/root/GameSettings"):
+		player_character = GameSettings.get_player_character()
+		cpu_character = GameSettings.get_cpu_character()
+
+	# Track occupied spawn positions during this spawn sequence
+	var occupied_positions: Array[Vector2] = []
+
+	# Spawn player
+	var player_point := _pick_point_for_role("player", null, occupied_positions)
+	var last_point: SpawnPoint = player_point
+
+	if player_point != null:
+		var player := PLAYER_SCENE.instantiate()
+		# Set position BEFORE adding to scene tree (so _ready() sees correct position)
+		player.global_position = player_point.global_position
+		player.character_asset_name = player_character
+		# Player stays white by default; set other per-role colors here if needed
+		occupied_positions.append(player_point.global_position)
+		get_parent().add_child(player)
+		
+		# Load selected character animations for player
+		if player.has_method("load_character_animations"):
+			player.load_character_animations(player_character)
+		
+		_last_point_by_id[player.get_instance_id()] = player_point
+	
+	# Spawn multiple NPCs based on GameSettings
+	var cpu_count := 1
+	if has_node("/root/GameSettings"):
+		cpu_count = GameSettings.get_cpu_count()
+	
+	for i in range(cpu_count):
+		var npc_point := _pick_point_for_role("npc", last_point, occupied_positions)
+		if npc_point != null:
+			var npc := NPC_SCENE.instantiate()
+			# Set position BEFORE adding to scene tree (so _ready() sees correct position)
+			npc.global_position = npc_point.global_position
+			npc.character_asset_name = cpu_character
+			# Assign unique color before the node enters the tree so HUD/UI pick it up
+			var color_index := i % CPU_COLORS.size()
+			var tint: Color = CPU_COLORS[color_index]
+			npc.character_color = tint
+			var sprite_pre := npc.get_node_or_null("AnimatedSprite2D")
+			if sprite_pre:
+				sprite_pre.modulate = tint
+			occupied_positions.append(npc_point.global_position)
+			get_parent().add_child(npc)
+			
+			# Load selected character animations for CPU
+			if npc.has_method("load_character_animations"):
+				npc.load_character_animations(cpu_character)
+			
+			# Ensure tint persists after animation load
+			var sprite := npc.get_node_or_null("AnimatedSprite2D")
+			if sprite:
+				sprite.modulate = tint
+			
+			_last_point_by_id[npc.get_instance_id()] = npc_point
+			last_point = npc_point
+
+
+func get_spawn_position_for(character: CharacterController) -> Vector2:
+	var role := "player" if character.is_human else "npc"
+	var last_point: SpawnPoint = _last_point_by_id.get(character.get_instance_id(), null) as SpawnPoint
+	var point: SpawnPoint = _pick_point_for_role(role, last_point, [])
+	if point == null:
+		# Fallback: center of viewport
+		return get_viewport().get_visible_rect().size * 0.5
+	_last_point_by_id[character.get_instance_id()] = point
+	return point.global_position
+
+
+func _pick_point_for_role(role: String, avoid_point: SpawnPoint, occupied_positions: Array[Vector2]) -> SpawnPoint:
+	if _spawn_points.is_empty():
+		return null
+	# Filter by allowed role
+	var candidates: Array[SpawnPoint] = []
+	for p in _spawn_points:
+		if not is_instance_valid(p):
+			continue
+		if role == "player" and p.allowed == SpawnPoint.AllowedRole.NPC:
+			continue
+		if role == "npc" and p.allowed == SpawnPoint.AllowedRole.PLAYER:
+			continue
+		candidates.append(p)
+
+	if candidates.is_empty():
+		# fallback to all points
+		candidates = []
+		for n in _spawn_points:
+			if is_instance_valid(n):
+				candidates.append(n)
+
+	# Avoid same point for this character if provided
+	if avoid_point != null:
+		candidates = candidates.filter(func(x: SpawnPoint): return x != avoid_point)
+		if candidates.is_empty():
+			candidates = []
+			for n in _spawn_points:
+				if is_instance_valid(n):
+					candidates.append(n)
+
+	# Avoid being too close to any living character OR occupied spawn positions
+	var safe_candidates: Array[SpawnPoint] = []
+	var others: Array[Node] = []
+	others.assign(get_tree().get_nodes_in_group("characters"))
+	
+	for p in candidates:
+		var is_safe := true
+		
+		# Check against already-spawned characters
+		for node in others:
+			var c := node as CharacterController
+			if c == null or c.is_despawned:
+				continue
+			var dist := p.global_position.distance_to(c.global_position)
+			if dist < SAFE_SPAWN_DISTANCE:
+				is_safe = false
+				break
+		
+		# Check against occupied positions from current spawn batch
+		if is_safe:
+			for occupied_pos in occupied_positions:
+				var dist := p.global_position.distance_to(occupied_pos)
+				if dist < SAFE_SPAWN_DISTANCE:
+					is_safe = false
+					break
+		
+		if is_safe:
+			safe_candidates.append(p)
+	
+	if not safe_candidates.is_empty():
+		candidates = safe_candidates
+		# Random pick from safe candidates
+		candidates.shuffle()
+		return candidates[0]
+	else:
+		# No safe candidates - find the point furthest from all occupied positions
+		var best_point: SpawnPoint = null
+		var best_min_dist: float = 0.0
+		
+		for p in candidates:
+			# Find minimum distance to any occupied position
+			var min_dist := INF
+			for occupied_pos in occupied_positions:
+				var dist := p.global_position.distance_to(occupied_pos)
+				if dist < min_dist:
+					min_dist = dist
+			
+			# Also check distance to living characters
+			for node in others:
+				var c := node as CharacterController
+				if c == null or c.is_despawned:
+					continue
+				var dist := p.global_position.distance_to(c.global_position)
+				if dist < min_dist:
+					min_dist = dist
+			
+			# Pick the point with the largest minimum distance
+			if min_dist > best_min_dist:
+				best_min_dist = min_dist
+				best_point = p
+		
+		return best_point if best_point else candidates[0]

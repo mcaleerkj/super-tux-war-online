@@ -1,0 +1,341 @@
+[gd_scene load_steps=4 format=3 uid="uid://b8n5x40uc2bsb"]
+
+[ext_resource type="Script" uid="uid://da5q4e6jjjhuq" path="res://scripts/ui/start_menu.gd" id="1_start_menu_script"]
+[ext_resource type="Theme" uid="uid://cc60i0866epm4" path="res://assets/ui/menu_theme.tres" id="2_menu_theme"]
+[ext_resource type="Theme" uid="uid://brwa2gicd2egu" path="res://assets/ui/level_card_theme.tres" id="3_level_card_theme"]
+
+[node name="StartMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme = ExtResource("2_menu_theme")
+script = ExtResource("1_start_menu_script")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.08, 0.08, 0.1, 1)
+
+[node name="PanelContainer" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="PanelContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="PanelContainer/VBox"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+theme_override_font_sizes/font_size = 40
+text = "Super Tux War"
+horizontal_alignment = 1
+
+[node name="Separator1" type="HSeparator" parent="PanelContainer/VBox"]
+layout_mode = 2
+
+[node name="ContentHBox" type="HBoxContainer" parent="PanelContainer/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 40
+
+[node name="LeftPanel" type="VBoxContainer" parent="PanelContainer/VBox/ContentHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="LevelNavigationHBox" type="HBoxContainer" parent="PanelContainer/VBox/ContentHBox/LeftPanel"]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="PrevLevelButton" type="Button" parent="PanelContainer/VBox/ContentHBox/LeftPanel/LevelNavigationHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_font_sizes/font_size = 24
+text = "<"
+
+[node name="LevelContentVBox" type="VBoxContainer" parent="PanelContainer/VBox/ContentHBox/LeftPanel/LevelNavigationHBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="SelectedLevelLabel" type="Label" parent="PanelContainer/VBox/ContentHBox/LeftPanel/LevelNavigationHBox/LevelContentVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Tux's Castle"
+horizontal_alignment = 1
+
+[node name="LevelPreview" type="PanelContainer" parent="PanelContainer/VBox/ContentHBox/LeftPanel/LevelNavigationHBox/LevelContentVBox"]
+custom_minimum_size = Vector2(250, 180)
+layout_mode = 2
+theme = ExtResource("3_level_card_theme")
+
+[node name="LevelThumb" type="TextureRect" parent="PanelContainer/VBox/ContentHBox/LeftPanel/LevelNavigationHBox/LevelContentVBox/LevelPreview"]
+unique_name_in_owner = true
+layout_mode = 2
+stretch_mode = 5
+
+[node name="NextLevelButton" type="Button" parent="PanelContainer/VBox/ContentHBox/LeftPanel/LevelNavigationHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_font_sizes/font_size = 24
+text = ">"
+
+[node name="Buttons" type="VBoxContainer" parent="PanelContainer/VBox/ContentHBox"]
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_override_constants/separation = 12
+
+[node name="NewGameButton" type="Button" parent="PanelContainer/VBox/ContentHBox/Buttons"]
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_override_font_sizes/font_size = 26
+text = "Offline Game"
+
+[node name="OnlineGameButton" type="Button" parent="PanelContainer/VBox/ContentHBox/Buttons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_override_font_sizes/font_size = 26
+text = "Online Game"
+
+[node name="ModeSection" type="VBoxContainer" parent="PanelContainer/VBox/ContentHBox/Buttons"]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_constants/separation = 5
+
+[node name="ModeControls" type="HBoxContainer" parent="PanelContainer/VBox/ContentHBox/Buttons/ModeSection"]
+layout_mode = 2
+theme_override_constants/separation = 15
+alignment = 1
+
+[node name="PrevModeButton" type="Button" parent="PanelContainer/VBox/ContentHBox/Buttons/ModeSection/ModeControls"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "<"
+
+[node name="ModeDisplay" type="Label" parent="PanelContainer/VBox/ContentHBox/Buttons/ModeSection/ModeControls"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(180, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "Frag Limit"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="NextModeButton" type="Button" parent="PanelContainer/VBox/ContentHBox/Buttons/ModeSection/ModeControls"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = ">"
+
+[node name="ModeLabel" type="Label" parent="PanelContainer/VBox/ContentHBox/Buttons/ModeSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "Game Mode"
+horizontal_alignment = 1
+
+[node name="GoalSection" type="VBoxContainer" parent="PanelContainer/VBox/ContentHBox/Buttons"]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_constants/separation = 5
+
+[node name="GoalControls" type="HBoxContainer" parent="PanelContainer/VBox/ContentHBox/Buttons/GoalSection"]
+layout_mode = 2
+theme_override_constants/separation = 15
+alignment = 1
+
+[node name="DecreaseGoalButton" type="Button" parent="PanelContainer/VBox/ContentHBox/Buttons/GoalSection/GoalControls"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "<"
+
+[node name="GoalDisplay" type="Label" parent="PanelContainer/VBox/ContentHBox/Buttons/GoalSection/GoalControls"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(70, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "10"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="IncreaseGoalButton" type="Button" parent="PanelContainer/VBox/ContentHBox/Buttons/GoalSection/GoalControls"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = ">"
+
+[node name="GoalLabel" type="Label" parent="PanelContainer/VBox/ContentHBox/Buttons/GoalSection"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "Kills to Win"
+horizontal_alignment = 1
+
+[node name="OptionsButton" type="Button" parent="PanelContainer/VBox/ContentHBox/Buttons"]
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_override_font_sizes/font_size = 26
+text = "Options"
+
+[node name="RightPanel" type="VBoxContainer" parent="PanelContainer/VBox/ContentHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="CharactersHBox" type="HBoxContainer" parent="PanelContainer/VBox/ContentHBox/RightPanel"]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_constants/separation = 30
+alignment = 1
+
+[node name="PlayerSection" type="VBoxContainer" parent="PanelContainer/VBox/ContentHBox/RightPanel/CharactersHBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="PlayerLabel" type="Label" parent="PanelContainer/VBox/ContentHBox/RightPanel/CharactersHBox/PlayerSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Player"
+horizontal_alignment = 1
+
+[node name="PlayerClickArea" type="PanelContainer" parent="PanelContainer/VBox/ContentHBox/RightPanel/CharactersHBox/PlayerSection"]
+custom_minimum_size = Vector2(120, 120)
+layout_mode = 2
+size_flags_horizontal = 4
+
+[node name="PlayerButton" type="Button" parent="PanelContainer/VBox/ContentHBox/RightPanel/CharactersHBox/PlayerSection/PlayerClickArea"]
+unique_name_in_owner = true
+layout_mode = 2
+flat = true
+
+[node name="VBox" type="VBoxContainer" parent="PanelContainer/VBox/ContentHBox/RightPanel/CharactersHBox/PlayerSection/PlayerClickArea"]
+layout_mode = 2
+mouse_filter = 2
+alignment = 1
+
+[node name="PlayerPreview" type="TextureRect" parent="PanelContainer/VBox/ContentHBox/RightPanel/CharactersHBox/PlayerSection/PlayerClickArea/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 96)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_filter = 2
+expand_mode = 2
+stretch_mode = 4
+
+[node name="CPUSection" type="VBoxContainer" parent="PanelContainer/VBox/ContentHBox/RightPanel/CharactersHBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="CPULabel" type="Label" parent="PanelContainer/VBox/ContentHBox/RightPanel/CharactersHBox/CPUSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "CPU"
+horizontal_alignment = 1
+
+[node name="CPUClickArea" type="PanelContainer" parent="PanelContainer/VBox/ContentHBox/RightPanel/CharactersHBox/CPUSection"]
+custom_minimum_size = Vector2(120, 120)
+layout_mode = 2
+size_flags_horizontal = 4
+
+[node name="CPUButton" type="Button" parent="PanelContainer/VBox/ContentHBox/RightPanel/CharactersHBox/CPUSection/CPUClickArea"]
+unique_name_in_owner = true
+layout_mode = 2
+flat = true
+
+[node name="VBox" type="VBoxContainer" parent="PanelContainer/VBox/ContentHBox/RightPanel/CharactersHBox/CPUSection/CPUClickArea"]
+layout_mode = 2
+mouse_filter = 2
+alignment = 1
+
+[node name="CPUPreview" type="TextureRect" parent="PanelContainer/VBox/ContentHBox/RightPanel/CharactersHBox/CPUSection/CPUClickArea/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 96)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_filter = 2
+expand_mode = 2
+stretch_mode = 4
+
+[node name="CharacterClickHint" type="Label" parent="PanelContainer/VBox/ContentHBox/RightPanel"]
+layout_mode = 2
+text = "Click to select"
+horizontal_alignment = 1
+
+[node name="Separator2" type="HSeparator" parent="PanelContainer/VBox"]
+layout_mode = 2
+
+[node name="Legend" type="VBoxContainer" parent="PanelContainer/VBox"]
+modulate = Color(1, 1, 1, 0.65)
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="LegendTitle" type="Label" parent="PanelContainer/VBox/Legend"]
+modulate = Color(1, 1, 1, 0.75)
+layout_mode = 2
+size_flags_horizontal = 4
+text = "Controls"
+horizontal_alignment = 1
+
+[node name="LegendMove" type="Label" parent="PanelContainer/VBox/Legend"]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_font_sizes/font_size = 14
+text = "Move: A/D or Left/Right"
+horizontal_alignment = 1
+
+[node name="LegendPause" type="Label" parent="PanelContainer/VBox/Legend"]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_font_sizes/font_size = 14
+text = "Pause: Esc"
+horizontal_alignment = 1
+
+[node name="LegendJump" type="Label" parent="PanelContainer/VBox/Legend"]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_font_sizes/font_size = 14
+text = "Jump: W or Space"
+horizontal_alignment = 1
+
+[node name="LegendDown" type="Label" parent="PanelContainer/VBox/Legend"]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_font_sizes/font_size = 14
+text = "Down: S or Down Arrow"
+horizontal_alignment = 1
