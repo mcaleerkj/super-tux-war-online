@@ -84,22 +84,26 @@ modulate = Color(1, 1, 1, 0.75)
 
 [node name="LegendPause" type="Label" parent="CenterContainer/PanelContainer/VBox/Legend"]
 layout_mode = 2
-text = "Resume: Esc"
+text = "Resume: Esc • Menu/Start"
 theme_override_font_sizes/font_size = 14
 
 [node name="LegendMove" type="Label" parent="CenterContainer/PanelContainer/VBox/Legend"]
 layout_mode = 2
-text = "Move: A/D or Left/Right"
+text = "Move: A/D or Left/Right • Stick/D-pad"
+theme_override_font_sizes/font_size = 14
+
+[node name="LegendRun" type="Label" parent="CenterContainer/PanelContainer/VBox/Legend"]
+layout_mode = 2
+text = "Sprint: Shift • X/B/RT"
 theme_override_font_sizes/font_size = 14
 
 [node name="LegendJump" type="Label" parent="CenterContainer/PanelContainer/VBox/Legend"]
 layout_mode = 2
-text = "Jump: W or Space"
+text = "Jump: W or Space • A"
 theme_override_font_sizes/font_size = 14
 
 [node name="LegendDown" type="Label" parent="CenterContainer/PanelContainer/VBox/Legend"]
 layout_mode = 2
-text = "Down: S or Down Arrow"
+text = "Down: S or Down Arrow • Stick/D-pad Down"
 theme_override_font_sizes/font_size = 14
-
 

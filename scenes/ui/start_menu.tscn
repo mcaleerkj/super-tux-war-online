@@ -316,26 +316,33 @@ horizontal_alignment = 1
 layout_mode = 2
 size_flags_horizontal = 4
 theme_override_font_sizes/font_size = 14
-text = "Move: A/D or Left/Right"
+text = "Move: A/D or Left/Right • Stick/D-pad"
+horizontal_alignment = 1
+
+[node name="LegendRun" type="Label" parent="PanelContainer/VBox/Legend"]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_font_sizes/font_size = 14
+text = "Sprint: Shift • X/B/RT"
 horizontal_alignment = 1
 
 [node name="LegendPause" type="Label" parent="PanelContainer/VBox/Legend"]
 layout_mode = 2
 size_flags_horizontal = 4
 theme_override_font_sizes/font_size = 14
-text = "Pause: Esc"
+text = "Pause: Esc • Menu/Start"
 horizontal_alignment = 1
 
 [node name="LegendJump" type="Label" parent="PanelContainer/VBox/Legend"]
 layout_mode = 2
 size_flags_horizontal = 4
 theme_override_font_sizes/font_size = 14
-text = "Jump: W or Space"
+text = "Jump: W or Space • A"
 horizontal_alignment = 1
 
 [node name="LegendDown" type="Label" parent="PanelContainer/VBox/Legend"]
 layout_mode = 2
 size_flags_horizontal = 4
 theme_override_font_sizes/font_size = 14
-text = "Down: S or Down Arrow"
+text = "Down: S or Down Arrow • Stick/D-pad Down"
 horizontal_alignment = 1

@@ -46,6 +46,8 @@
 
     .card { background:#11151a; border:1px solid #222; border-radius:12px; padding:16px; }
     .card + .card { margin-top:16px; }
+	.gamepad-status { margin: 12px 0 0; color:#b8bec7; font-size:.92rem; }
+	.gamepad-status.ready { color:#77d693; }
 
     h2, h3 { margin: 8px 0 10px; font-weight:650; }
     kbd { background:#1b1f26; border:1px solid #333; padding:2px 6px; border-radius:6px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.9em; }
@@ -70,7 +72,7 @@
       <!-- Left column (becomes top on narrow screens) -->
       <div class="game-shell">
         <!-- The iframe scales with the shell; Godot page handles its own canvas -->
-        <iframe src="game/index.html" allow="autoplay; fullscreen; gamepad" title="Super Tux War"></iframe>
+        <iframe src="game/index.html" allow="autoplay; fullscreen; gamepad *" title="Super Tux War"></iframe>
       </div>
 
       <!-- Right column (drops below on narrow screens) -->
@@ -84,6 +86,15 @@
             <li><span><kbd>Shift</kbd></span> Sprint</li>
             <li><span><kbd>Esc</kbd></span> Pause / Menu</li>
           </ul>
+		  <h3>Xbox / gamepad</h3>
+		  <ul>
+			<li><span><kbd>Left Stick</kbd> / <kbd>D-pad</kbd></span> Move / menus</li>
+			<li><span><kbd>A</kbd></span> Jump / select</li>
+			<li><span><kbd>X</kbd> / <kbd>B</kbd> / <kbd>RT</kbd></span> Sprint</li>
+			<li><span><kbd>B</kbd></span> Back</li>
+			<li><span><kbd>Menu</kbd></span> Pause</li>
+		  </ul>
+		  <p id="gamepad-status" class="gamepad-status" aria-live="polite">Connect a controller and press any button.</p>
         </div>
 
         <div class="card">
@@ -95,5 +106,24 @@
       </aside>
     </div>
   </main>
+
+  <script>
+	(() => {
+	  const status = document.getElementById("gamepad-status");
+	  const updateGamepadStatus = () => {
+		const pads = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : [];
+		if (pads.length > 0) {
+		  status.textContent = `Controller ready: ${pads[0].id || "gamepad"}`;
+		  status.classList.add("ready");
+		} else {
+		  status.textContent = "Connect a controller and press any button.";
+		  status.classList.remove("ready");
+		}
+	  };
+	  window.addEventListener("gamepadconnected", updateGamepadStatus);
+	  window.addEventListener("gamepaddisconnected", updateGamepadStatus);
+	  updateGamepadStatus();
+	})();
+  </script>
 </body>
 </html>

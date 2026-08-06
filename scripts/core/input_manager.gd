@@ -134,6 +134,9 @@ func _ensure_default_actions() -> void:
 	_add_joy_button_if_missing("jump", JOY_BUTTON_A) # South (A on Xbox)
 	_add_joy_button_if_missing("ui_accept", JOY_BUTTON_A)
 	_add_joy_button_if_missing("ui_cancel", JOY_BUTTON_B) # East (B on Xbox)
+	_add_joy_button_if_missing("run", JOY_BUTTON_X) # West (X on Xbox)
+	_add_joy_button_if_missing("run", JOY_BUTTON_B) # Alternate Mario-style run button
+	_add_joy_button_if_missing("run", JOY_BUTTON_RIGHT_SHOULDER)
 	_add_joy_button_if_missing("pause", JOY_BUTTON_START)
 	# D-Pad for menus and movement
 	_add_joy_button_if_missing("ui_left", JOY_BUTTON_DPAD_LEFT)
@@ -151,6 +154,7 @@ func _ensure_default_actions() -> void:
 	_add_axis_if_missing("ui_right", JOY_AXIS_LEFT_X, 1.0)
 	_add_axis_if_missing("ui_up", JOY_AXIS_LEFT_Y, -1.0)
 	_add_axis_if_missing("ui_down", JOY_AXIS_LEFT_Y, 1.0)
+	_add_axis_if_missing("run", JOY_AXIS_TRIGGER_RIGHT, 1.0)
 
 
 func _ensure_action(action: String) -> void:

@@ -25,6 +25,8 @@ Website: https://supertuxwar.com
 - Jump: Space or W
 - Turbo: Shift
 - Drop through platforms: S+Space (Down+Jump)
+- Xbox/gamepad: Left Stick or D-pad to move, A to jump/select, X/B/RT to
+  sprint, B to go back, and Menu/Start to pause
 
 ## Online friend matches
 

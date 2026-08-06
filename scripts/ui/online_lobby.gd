@@ -57,6 +57,15 @@ func open() -> void:
 	else:
 		_create_button.grab_focus()
 
+func _unhandled_input(event: InputEvent) -> void:
+	if not visible or not event.is_action_pressed("ui_cancel") or event.is_echo():
+		return
+	get_viewport().set_input_as_handled()
+	if NetworkSession.has_active_session():
+		_on_leave_pressed()
+	else:
+		hide()
+
 func _on_join_pressed() -> void:
 	NetworkSession.join_room(_room_code_input.text)
 
