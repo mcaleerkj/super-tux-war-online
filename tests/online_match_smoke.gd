@@ -8,6 +8,16 @@ func _ready() -> void:
 	_run.call_deferred()
 
 func _run() -> void:
+	# NetworkProtocol duplicates each online mode's goal bounds so it stays
+	# loadable without autoloads. This scene has them, so it is where the copy is
+	# held to the mode prototype it was copied from.
+	for mode_id: StringName in NetworkProtocol.ONLINE_MODE_GOALS:
+		var bounds: Dictionary = NetworkProtocol.ONLINE_MODE_GOALS[mode_id]
+		_expect(ModeRegistry.is_valid(mode_id), "online mode %s is a registered mode" % mode_id)
+		var prototype := ModeRegistry.get_prototype(mode_id)
+		_expect(int(bounds["min"]) == prototype.goal_min(), "%s goal floor matches its prototype" % mode_id)
+		_expect(int(bounds["max"]) == prototype.goal_max(), "%s goal ceiling matches its prototype" % mode_id)
+
 	var config := {
 		"protocol_version": NetworkProtocol.VERSION,
 		"mode_id": "frag",

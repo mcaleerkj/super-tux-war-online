@@ -1,10 +1,12 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
+import { PROTOCOL_VERSION } from "../src/protocol";
+
 // Exercises the committed production allowlist in wrangler.jsonc, so a bad
 // ALLOWED_ORIGINS value fails CI instead of the live game.
 const headers = { Origin: "https://mcaleerkj.github.io", "Content-Type": "application/json" };
-const body = JSON.stringify({ protocol_version: 1 });
+const body = JSON.stringify({ protocol_version: PROTOCOL_VERSION });
 
 async function createRoom(): Promise<Record<string, unknown>> {
   const created = await SELF.fetch("https://example.test/v1/rooms", { method: "POST", headers, body });
@@ -35,7 +37,7 @@ describe("room service", () => {
     const oldClient = await SELF.fetch("https://example.test/v1/rooms", {
       method: "POST",
       headers,
-      body: JSON.stringify({ protocol_version: 99 }),
+      body: JSON.stringify({ protocol_version: PROTOCOL_VERSION + 97 }),
     });
     expect(oldClient.status).toBe(400);
 

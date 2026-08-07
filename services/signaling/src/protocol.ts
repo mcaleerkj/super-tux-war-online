@@ -1,4 +1,6 @@
-export const PROTOCOL_VERSION = 1;
+// Must stay in lockstep with NetworkProtocol.VERSION in
+// scripts/network/network_protocol.gd — the Worker rejects any other value.
+export const PROTOCOL_VERSION = 2;
 export const ROOM_CODE_LENGTH = 8;
 export const ROOM_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 export const TICKET_TTL_MS = 60_000;
