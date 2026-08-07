@@ -13,16 +13,14 @@ npm run typecheck
 npm run dev
 ```
 
-`network_config.json` already points debug web exports at
-`http://127.0.0.1:8787`.
+`npm run dev` passes the localhost `ALLOWED_ORIGINS` to Wrangler, and a web
+export served from `127.0.0.1` or `localhost` automatically targets this local
+Worker instead of the deployed one. Neither side needs editing to develop.
 
 ## Production setup
 
-1. Set the GitHub repository variable `GAME_ORIGIN` to the exact GitHub Pages
-   origin. The release workflow supplies it as the Worker's `ALLOWED_ORIGINS`
-   value while keeping localhost available in the checked-in development config.
-2. Create a Cloudflare Realtime TURN key.
-3. Store its credentials in the Worker; never put them in the Godot project:
+1. Create a Cloudflare Realtime TURN key.
+2. Store its credentials in the Worker; never put them in the Godot project:
 
 ```sh
 npx wrangler secret put TURN_KEY_ID
@@ -30,7 +28,11 @@ npx wrangler secret put TURN_API_TOKEN
 npm run deploy
 ```
 
-4. Set the GitHub repository secrets `CLOUDFLARE_ACCOUNT_ID` and
-   `CLOUDFLARE_API_TOKEN`, then set the repository variable
-   `SIGNALING_BASE_URL` to the deployed Worker URL. The Pages workflow injects
-   it into the exported game.
+3. Set the GitHub repository secrets `CLOUDFLARE_ACCOUNT_ID` and
+   `CLOUDFLARE_API_TOKEN` so the release workflow can deploy.
+
+Deployment configuration is committed rather than supplied by repository
+variables or CLI flags, so a manual `npm run deploy` matches what CI produces.
+Forks change two values: `vars.ALLOWED_ORIGINS` in `wrangler.jsonc` (the CORS
+allowlist, exercised by `npm test`) and `signaling_base_url` in the project's
+`network_config.json` (checked by the Godot unit tests).

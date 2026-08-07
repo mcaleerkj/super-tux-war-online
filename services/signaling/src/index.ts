@@ -38,6 +38,8 @@ interface RoomRecord {
 interface SocketAttachment {
   role: Role;
   connectedAt: number;
+  /** Set when the same player reconnected and took over this role's slot. */
+  evicted?: boolean;
 }
 
 export default {
@@ -70,6 +72,8 @@ export default {
         return cors(await joinRoom(request, env, stub, roomCode), origin, env);
       }
       if (request.method === "POST" && parts[3] === "signal-ticket") {
+        const limited = await env.JOIN_RATE_LIMITER.limit({ key: request.headers.get("CF-Connecting-IP") ?? "local" });
+        if (!limited.success) return json({ error: "Too many signaling attempts. Try again shortly." }, 429, origin, env);
         return cors(await refreshTicket(request, stub), origin, env);
       }
       if (request.method === "GET" && parts[3] === "signal") {
@@ -255,13 +259,15 @@ export class GameRoom extends DurableObject<Env> {
     }
   }
 
-  async webSocketClose(socket: WebSocket, code: number, reason: string): Promise<void> {
+  async webSocketClose(socket: WebSocket, _code: number, _reason: string): Promise<void> {
     const attachment = socket.deserializeAttachment() as SocketAttachment | null;
-    if (attachment) {
-      const other: Role = attachment.role === "host" ? "guest" : "host";
-      for (const target of this.ctx.getWebSockets(other)) target.send(JSON.stringify({ type: "peer_left" }));
-    }
-    socket.close(code, reason);
+    // An evicted socket belongs to a player who is reconnecting after a
+    // signaling drop, so its peer must not be told that anyone left. The socket
+    // is already closing here; re-closing it with the client's code would throw
+    // on reserved codes such as 1006 (abnormal closure on tab close).
+    if (!attachment || attachment.evicted) return;
+    const other: Role = attachment.role === "host" ? "guest" : "host";
+    for (const target of this.ctx.getWebSockets(other)) target.send(JSON.stringify({ type: "peer_left" }));
   }
 
   private async create(request: Request): Promise<Response> {
@@ -322,7 +328,15 @@ export class GameRoom extends DurableObject<Env> {
     if (ticketHash === room.hostTicketHash && now <= room.hostTicketExpiresAt) role = "host";
     if (ticketHash === room.guestTicketHash && now <= (room.guestTicketExpiresAt ?? 0)) role = "guest";
     if (!role) return json({ error: "Invalid or expired signaling ticket." }, 401);
-    if (this.ctx.getWebSockets(role).length > 0) return json({ error: "Role is already connected." }, 409);
+    // A fresh ticket proves possession of the role secret, so this is the same
+    // player returning after a dropped socket. Evict the stale one rather than
+    // rejecting the reconnect: the server may not have observed the TCP
+    // teardown yet, and a 409 here would strand the player on a dead room.
+    for (const existing of this.ctx.getWebSockets(role)) {
+      const previous = existing.deserializeAttachment() as SocketAttachment | null;
+      existing.serializeAttachment({ ...(previous ?? { role, connectedAt: now }), evicted: true });
+      existing.close(4002, "Replaced by a reconnecting session");
+    }
     if (role === "host") room.hostTicketExpiresAt = 0;
     else room.guestTicketExpiresAt = 0;
     await this.ctx.storage.put("room", room);

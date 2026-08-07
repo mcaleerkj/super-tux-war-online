@@ -21,6 +21,22 @@ func _run() -> void:
 	_expect(not NetworkProtocol.is_valid_room_code("O0IL1234"), "rejects ambiguous code characters")
 	_expect(NetworkProtocol.level_path_from_id("level02").ends_with("level02.tscn"), "maps stable level IDs")
 
+	# The committed config must be playable as exported. Only a build served from
+	# a development host may fall back to the local Worker, so off-web callers
+	# always resolve to the deployed URL.
+	var shipped_config := NetworkProtocol.load_runtime_config()
+	var resolved := NetworkProtocol.resolve_signaling_base_url(shipped_config)
+	_expect(resolved.begins_with("https://"), "ships a deployed signaling URL, not localhost")
+	_expect(not resolved.ends_with("/"), "normalizes the signaling base URL")
+	_expect(
+		str(shipped_config.get("local_signaling_base_url", "")) != "",
+		"keeps a local signaling override for development"
+	)
+	_expect(
+		NetworkProtocol.resolve_signaling_base_url({"local_signaling_base_url": "http://127.0.0.1:8787"}) == "",
+		"reports no signaling service when none is configured"
+	)
+
 	var input := NetworkProtocol.sanitize_input({
 		"sequence": 9,
 		"client_tick": 9,

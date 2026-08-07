@@ -29,14 +29,13 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
+      # ALLOWED_ORIGINS lives in wrangler.jsonc so that a manual `npm run deploy`
+      # produces the same configuration this workflow does.
       - name: Deploy Worker
-        run: |
-          test -n "$GAME_ORIGIN"
-          npm run deploy -- --var "ALLOWED_ORIGINS:$GAME_ORIGIN"
+        run: npm run deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          GAME_ORIGIN: ${{ vars.GAME_ORIGIN }}
 
   export-web:
     name: Web Export
@@ -70,13 +69,9 @@ jobs:
         run: |
           ./Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --verbose --editor --quit
 
-      - name: Configure online service
-        env:
-          SIGNALING_BASE_URL: ${{ vars.SIGNALING_BASE_URL }}
-        run: |
-          test -n "$SIGNALING_BASE_URL"
-          node -e 'const fs=require("fs"); const p="network_config.json"; const c=JSON.parse(fs.readFileSync(p,"utf8")); c.signaling_base_url=process.env.SIGNALING_BASE_URL.replace(/\/$/,""); fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n")'
-
+      # network_config.json already carries the deployed signaling URL, and the
+      # game falls back to the local Worker only when served from a development
+      # host. No build-time rewrite needed.
       - name: Build Web
         run: |
           mkdir -p build/web/game

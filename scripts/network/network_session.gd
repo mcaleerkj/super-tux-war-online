@@ -41,8 +41,17 @@ var _http: HTTPRequest
 var _websocket: WebSocketPeer
 var _webrtc_connection: WebRTCPeerConnection
 var _webrtc_peer: WebRTCMultiplayerPeer
-var _websocket_was_open := false
 var _offer_started := false
+## Bumped on every teardown so a coroutine that resumes after an awaited HTTP
+## round trip can tell whether the session it started for is still the current
+## one. Without it, leaving the lobby mid-request lets the response reconfigure
+## a session the player already abandoned.
+var _session_epoch := 0
+var _signal_reconnect_attempts := 0
+var _signal_reconnecting := false
+var _local_description: Dictionary = {}
+var _local_ice_candidates: Array[Dictionary] = []
+var _remote_description_sdp := ""
 
 var _server_tick := 0
 var _local_input_sequence := 0
@@ -60,7 +69,7 @@ var _state_started_msec := 0
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_runtime_config = NetworkProtocol.load_runtime_config()
-	_base_url = str(_runtime_config.get("signaling_base_url", "")).strip_edges().trim_suffix("/")
+	_base_url = NetworkProtocol.resolve_signaling_base_url(_runtime_config)
 	_http = HTTPRequest.new()
 	_http.timeout = 15.0
 	add_child(_http)
@@ -134,12 +143,15 @@ func create_room() -> void:
 	if not _can_begin_connection():
 		return
 	_reset_transport(false)
+	var epoch := _session_epoch
 	local_peer_id = NetworkProtocol.HOST_PEER_ID
 	_lobby = _default_lobby()
 	_set_state(SessionState.CREATING, "Creating a private room...")
 	var response := await _request_json(HTTPClient.METHOD_POST, "/v1/rooms", {
 		"protocol_version": NetworkProtocol.VERSION,
 	})
+	if epoch != _session_epoch:
+		return
 	if not _accept_room_response(response):
 		return
 	room_created.emit(room_code)
@@ -153,12 +165,15 @@ func join_room(value: String) -> void:
 		_fail("Enter a valid eight-character room code.")
 		return
 	_reset_transport(false)
+	var epoch := _session_epoch
 	local_peer_id = NetworkProtocol.GUEST_PEER_ID
 	room_code = code
 	_set_state(SessionState.CONNECTING, "Joining room %s..." % code)
 	var response := await _request_json(HTTPClient.METHOD_POST, "/v1/rooms/%s/join" % code, {
 		"protocol_version": NetworkProtocol.VERSION,
 	})
+	if epoch != _session_epoch:
+		return
 	if not _accept_room_response(response):
 		return
 
@@ -432,14 +447,16 @@ func _can_begin_connection() -> bool:
 		return false
 	return true
 
-func _request_json(method: HTTPClient.Method, path: String, payload: Dictionary) -> Dictionary:
+func _request_json(
+	method: HTTPClient.Method,
+	path: String,
+	payload: Dictionary,
+	extra_headers: PackedStringArray = PackedStringArray()
+) -> Dictionary:
 	var body := JSON.stringify(payload)
-	var err := _http.request(
-		_base_url + path,
-		PackedStringArray(["Content-Type: application/json", "Accept: application/json"]),
-		method,
-		body
-	)
+	var headers := PackedStringArray(["Content-Type: application/json", "Accept: application/json"])
+	headers.append_array(extra_headers)
+	var err := _http.request(_base_url + path, headers, method, body)
 	if err != OK:
 		return {"ok": false, "error": error_string(err)}
 	var completed: Array = await _http.request_completed
@@ -497,14 +514,17 @@ func _start_webrtc() -> bool:
 		_fail("Could not attach the WebRTC peer: %s" % error_string(err))
 		return false
 	multiplayer.multiplayer_peer = _webrtc_peer
+	_offer_started = false
+	return _open_signaling_socket()
+
+func _open_signaling_socket() -> bool:
 	_websocket = WebSocketPeer.new()
 	var separator := "&" if "?" in _signal_url else "?"
-	err = _websocket.connect_to_url(_signal_url + separator + "ticket=" + _signal_ticket.uri_encode())
+	var err := _websocket.connect_to_url(_signal_url + separator + "ticket=" + _signal_ticket.uri_encode())
 	if err != OK:
+		_websocket = null
 		_fail("Could not open the signaling connection: %s" % error_string(err))
 		return false
-	_websocket_was_open = false
-	_offer_started = false
 	return true
 
 func _poll_signaling() -> void:
@@ -513,7 +533,6 @@ func _poll_signaling() -> void:
 	_websocket.poll()
 	var socket_state := _websocket.get_ready_state()
 	if socket_state == WebSocketPeer.STATE_OPEN:
-		_websocket_was_open = true
 		while _websocket.get_available_packet_count() > 0:
 			var packet := _websocket.get_packet()
 			if packet.size() > NetworkProtocol.MAX_SIGNAL_MESSAGE_BYTES:
@@ -521,9 +540,48 @@ func _poll_signaling() -> void:
 			var parsed: Variant = JSON.parse_string(packet.get_string_from_utf8())
 			if parsed is Dictionary:
 				_handle_signal_message(parsed)
-	elif socket_state == WebSocketPeer.STATE_CLOSED and _websocket_was_open \
+	elif socket_state == WebSocketPeer.STATE_CLOSED \
 			and state in [SessionState.WAITING, SessionState.CONNECTING]:
+		# Covers both a dropped socket and one that never opened. A host sitting
+		# in WAITING has no handshake timeout, so the retry cap is what stops
+		# this from spinning silently forever.
+		_begin_signaling_reconnect()
+
+## Signaling tickets are single-use, so a socket that drops before WebRTC is
+## established cannot simply redial. Trade the role secret for a fresh ticket
+## and resume the exchange rather than forcing both players onto a new room.
+func _begin_signaling_reconnect() -> void:
+	if _signal_reconnecting:
+		return
+	_websocket = null
+	if _role_secret == "" or _signal_reconnect_attempts >= NetworkProtocol.MAX_SIGNAL_RECONNECT_ATTEMPTS:
 		_fail("The signaling connection closed before WebRTC was ready.")
+		return
+	_signal_reconnecting = true
+	_signal_reconnect_attempts += 1
+	_resume_signaling.call_deferred()
+
+func _resume_signaling() -> void:
+	var epoch := _session_epoch
+	var response := await _request_json(
+		HTTPClient.METHOD_POST,
+		"/v1/rooms/%s/signal-ticket" % room_code,
+		{"protocol_version": NetworkProtocol.VERSION},
+		PackedStringArray(["Authorization: Bearer " + _role_secret])
+	)
+	if epoch != _session_epoch:
+		return
+	_signal_reconnecting = false
+	# WebRTC may have completed while the ticket was in flight, in which case
+	# signaling is no longer needed at all.
+	if state not in [SessionState.WAITING, SessionState.CONNECTING]:
+		return
+	var ticket := str(response.get("signal_ticket", ""))
+	if not bool(response.get("ok", false)) or ticket == "":
+		_fail(str(response.get("error", "Lost the signaling connection and could not resume.")))
+		return
+	_signal_ticket = ticket
+	_open_signaling_socket()
 
 func _handle_signal_message(message: Dictionary) -> void:
 	var type := str(message.get("type", ""))
@@ -533,10 +591,21 @@ func _handle_signal_message(message: Dictionary) -> void:
 			var err := _webrtc_connection.create_offer()
 			if err != OK:
 				_fail("Could not create a WebRTC offer: %s" % error_string(err))
+		else:
+			# Reaching here a second time means signaling was re-established. The
+			# peer may have missed whatever we produced while the socket was
+			# down, so replay it instead of renegotiating the connection.
+			_replay_local_signals()
 	elif type in ["offer", "answer"]:
 		var sdp := str(message.get("sdp", ""))
-		if sdp.length() <= NetworkProtocol.MAX_SIGNAL_MESSAGE_BYTES:
-			_webrtc_connection.set_remote_description(type, sdp)
+		if sdp.length() > NetworkProtocol.MAX_SIGNAL_MESSAGE_BYTES or sdp == _remote_description_sdp:
+			return  # Oversized, or a replay of the description already applied.
+		# Only the host offers and only the guest answers. Anything else is a
+		# confused or hostile peer trying to push us into SDP glare.
+		if (type == "offer") == is_host():
+			return
+		_remote_description_sdp = sdp
+		_webrtc_connection.set_remote_description(type, sdp)
 	elif type == "ice":
 		_webrtc_connection.add_ice_candidate(
 			str(message.get("media", "")),
@@ -551,10 +620,23 @@ func _handle_signal_message(message: Dictionary) -> void:
 
 func _on_session_description_created(type: String, sdp: String) -> void:
 	if _webrtc_connection.set_local_description(type, sdp) == OK:
-		_send_signal({"type": type, "sdp": sdp})
+		_local_description = {"type": type, "sdp": sdp}
+		_send_signal(_local_description)
 
 func _on_ice_candidate_created(media: String, index: int, candidate: String) -> void:
-	_send_signal({"type": "ice", "media": media, "index": index, "candidate": candidate})
+	var message := {"type": "ice", "media": media, "index": index, "candidate": candidate}
+	if _local_ice_candidates.size() < NetworkProtocol.MAX_CACHED_ICE_CANDIDATES:
+		_local_ice_candidates.append(message)
+	_send_signal(message)
+
+## Re-sends everything this peer has produced so far. Duplicate descriptions are
+## dropped on receipt and duplicate ICE candidates are harmless to WebRTC.
+func _replay_local_signals() -> void:
+	if _local_description.is_empty():
+		return
+	_send_signal(_local_description)
+	for candidate in _local_ice_candidates:
+		_send_signal(candidate)
 
 func _send_signal(message: Dictionary) -> void:
 	if _websocket and _websocket.get_ready_state() == WebSocketPeer.STATE_OPEN:
@@ -706,6 +788,8 @@ func _abort_for_disconnect(message: String) -> void:
 		GameStateManager.abort_online_match(message)
 
 func _reset_transport(reset_identity: bool) -> void:
+	# Invalidates any awaited request still in flight for the previous session.
+	_session_epoch += 1
 	if _websocket:
 		_websocket.close(1000, "Session ended")
 	if _webrtc_connection:
@@ -714,8 +798,12 @@ func _reset_transport(reset_identity: bool) -> void:
 	_websocket = null
 	_webrtc_connection = null
 	_webrtc_peer = null
-	_websocket_was_open = false
 	_offer_started = false
+	_signal_reconnecting = false
+	_signal_reconnect_attempts = 0
+	_local_description.clear()
+	_local_ice_candidates.clear()
+	_remote_description_sdp = ""
 	_characters.clear()
 	_current_match.clear()
 	_local_input_history.clear()

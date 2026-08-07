@@ -1,4 +1,5 @@
 {
-  "signaling_base_url": "http://127.0.0.1:8787",
-  "allowed_local_origins": ["http://127.0.0.1", "http://localhost"]
+  "signaling_base_url": "https://super-tux-war-signaling.mcaleerkj.workers.dev",
+  "local_signaling_base_url": "http://127.0.0.1:8787",
+  "local_hosts": ["127.0.0.1", "localhost"]
 }

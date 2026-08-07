@@ -11,6 +11,8 @@ const SNAPSHOT_INTERVAL_TICKS := 3
 const INPUT_STALE_MSEC := 250
 const DISCONNECT_TIMEOUT_MSEC := 10_000
 const HANDSHAKE_TIMEOUT_MSEC := 20_000
+const MAX_SIGNAL_RECONNECT_ATTEMPTS := 3
+const MAX_CACHED_ICE_CANDIDATES := 64
 const CHARACTERS := ["tux", "beasty", "gopher"]
 const FRAG_GOAL_MIN := 3
 const FRAG_GOAL_MAX := 50
@@ -116,3 +118,21 @@ static func load_runtime_config() -> Dictionary:
 		return {}
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	return parsed if parsed is Dictionary else {}
+
+## Picks the signaling service for the page the build is served from. The
+## committed config carries the deployed URL so every export is playable by
+## default; a build served from a development host transparently switches to
+## the local Worker instead of needing the file rewritten before export.
+static func resolve_signaling_base_url(config: Dictionary) -> String:
+	var deployed := _clean_base_url(config.get("signaling_base_url", ""))
+	var local := _clean_base_url(config.get("local_signaling_base_url", ""))
+	if local == "" or not OS.has_feature("web"):
+		return deployed
+	var hosts: Variant = config.get("local_hosts", [])
+	if not hosts is Array or (hosts as Array).is_empty():
+		return deployed
+	var hostname: Variant = JavaScriptBridge.eval("window.location.hostname", true)
+	return local if str(hostname) in hosts else deployed
+
+static func _clean_base_url(value: Variant) -> String:
+	return str(value).strip_edges().trim_suffix("/")

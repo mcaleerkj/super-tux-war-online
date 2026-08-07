@@ -34,37 +34,64 @@ npm run typecheck
 npm run dev
 ```
 
-`network_config.json` points local web exports to `http://127.0.0.1:8787`.
+`network_config.json` carries the deployed Worker URL, so any export is
+playable as built. A build served from a host listed in its `local_hosts` array
+switches to `local_signaling_base_url` (`http://127.0.0.1:8787`) instead, which
+is what makes `npm run dev` work without editing or rewriting the file. The
+`dev` script passes the matching localhost CORS allowlist to Wrangler.
+
 Godot's online button is intentionally enabled only in a web export; native
 editor builds would require the separate WebRTC native extension.
+
+## Recovering a dropped signaling socket
+
+Signaling tickets are single-use and burned when the WebSocket connects. If the
+socket drops before WebRTC finishes negotiating, the client trades its role
+secret for a fresh ticket via `POST /v1/rooms/{code}/signal-ticket`, reopens the
+socket, and replays the SDP and ICE it already produced; duplicate descriptions
+are ignored on receipt. The Durable Object evicts the stale socket for that role
+rather than answering 409, and suppresses the `peer_left` notice for an evicted
+socket so the waiting player never sees a spurious disconnect. Recovery is
+capped at three attempts per session.
+
+This covers the signaling phase only. Once gameplay is running on the data
+channel, v1 still ends the match after a ten-second timeout rather than
+attempting host migration or reconnection.
 
 ## Cloudflare deployment
 
 1. Create a Cloudflare Worker account and a Realtime TURN key.
-2. Keep the localhost `ALLOWED_ORIGINS` value for local development.
-3. Add the runtime secrets:
+2. Add the runtime secrets:
 
    ```sh
    cd services/signaling
    npx wrangler secret put TURN_KEY_ID
    npx wrangler secret put TURN_API_TOKEN
-   npm run deploy -- --var "ALLOWED_ORIGINS:https://mcaleerkj.github.io"
+   npm run deploy
    ```
 
    The value after `secret put` is the binding name. Paste the corresponding
    credential only when Wrangler prompts for its secret value.
 
-4. Add repository secrets `CLOUDFLARE_ACCOUNT_ID` and
-   `CLOUDFLARE_API_TOKEN` for Worker deployment.
-5. Add repository variable `GAME_ORIGIN` containing the exact GitHub Pages
-   origin, `https://mcaleerkj.github.io`; the deployment passes it to the
-   Worker as its production CORS allowlist.
-6. Add repository variable `SIGNALING_BASE_URL` containing the deployed Worker
-   origin, `https://super-tux-war-signaling.mcaleerkj.workers.dev`.
+3. Add repository secrets `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`
+   for Worker deployment.
 
-Release tags deploy the Worker, inject that public URL into
-`network_config.json`, export with Godot 4.7.1, and publish GitHub Pages. TURN
-keys remain only in Cloudflare; browsers receive six-hour credentials.
+Forking this project means changing two committed values, both of which CI
+checks or exercises:
+
+| Setting | File | Value |
+| --- | --- | --- |
+| CORS allowlist | `services/signaling/wrangler.jsonc` (`vars.ALLOWED_ORIGINS`) | your Pages origin |
+| Signaling URL | `network_config.json` (`signaling_base_url`) | your deployed Worker origin |
+
+Both deliberately live in version control rather than in repository variables
+or CLI flags: a manual `npm run deploy` or a local `--export-release` then
+produces exactly what the release workflow does, instead of silently shipping a
+localhost-only build or locking the live game out of its own signaling service.
+
+Release tags deploy the Worker, export with Godot 4.7.1, and publish GitHub
+Pages. TURN keys remain only in Cloudflare; browsers receive six-hour
+credentials.
 
 ## Verification
 
