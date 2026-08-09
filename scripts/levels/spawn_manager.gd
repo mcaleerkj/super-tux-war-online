@@ -47,11 +47,13 @@ func spawn_online_roster(config: Dictionary) -> Dictionary:
 	if not NetworkProtocol.validate_match_config(config):
 		push_error("SpawnManager: rejected invalid online match config")
 		return spawned
-	if _spawn_points.size() < 2:
-		push_error("SpawnManager: online matches require at least two spawn points")
+	# Duplicated so sorting does not reorder the caller's authoritative config.
+	var participants: Array = (config.get("participants", []) as Array).duplicate(true)
+	if _spawn_points.size() < participants.size():
+		push_error("SpawnManager: online matches need one spawn point per participant (%d < %d)" % [
+			_spawn_points.size(), participants.size()
+		])
 		return spawned
-
-	var participants: Array = config.get("participants", [])
 	participants.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a.peer_id) < int(b.peer_id))
 	for index in participants.size():
 		var participant: Dictionary = participants[index]
@@ -70,7 +72,11 @@ func spawn_online_roster(config: Dictionary) -> Dictionary:
 			int(participant.get("color_slot", index))
 		)
 		character.global_position = _spawn_points[index].global_position
-		character.character_color = Color.WHITE if peer_id == NetworkProtocol.HOST_PEER_ID else Color(0.35, 0.85, 1.0)
+		# Colour comes from the participant's slot, not from host-vs-guest: with
+		# only three character sprites, the slot is what keeps a six-player
+		# roster visually distinguishable.
+		var color_slot := int(participant.get("color_slot", index))
+		character.character_color = CPU_COLORS[color_slot % CPU_COLORS.size()]
 		get_parent().add_child(character)
 		character.load_character_animations(character.character_asset_name)
 		var sprite := character.get_node_or_null("AnimatedSprite2D") as AnimatedSprite2D

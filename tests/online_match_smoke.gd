@@ -18,15 +18,22 @@ func _run() -> void:
 		_expect(int(bounds["min"]) == prototype.goal_min(), "%s goal floor matches its prototype" % mode_id)
 		_expect(int(bounds["max"]) == prototype.goal_max(), "%s goal ceiling matches its prototype" % mode_id)
 
+	# A full six-player roster, so the spawn, colour, and registration paths are
+	# exercised at the maximum rather than at the degenerate two-player case.
+	var roster_size := NetworkProtocol.MAX_PLAYERS
+	var participants: Array = []
+	for index in roster_size:
+		participants.append({
+			"peer_id": NetworkProtocol.HOST_PEER_ID + index,
+			"character_id": NetworkProtocol.CHARACTERS[index % NetworkProtocol.CHARACTERS.size()],
+			"color_slot": index,
+		})
 	var config := {
 		"protocol_version": NetworkProtocol.VERSION,
 		"mode_id": "frag",
 		"level_id": "level01",
 		"goal": 3,
-		"participants": [
-			{"peer_id": 1, "character_id": "tux", "color_slot": 0},
-			{"peer_id": 2, "character_id": "gopher", "color_slot": 1},
-		],
+		"participants": participants,
 	}
 	var session := get_tree().root.get_node("NetworkSession")
 	var game_state := get_tree().root.get_node("GameStateManager")
@@ -38,13 +45,32 @@ func _run() -> void:
 	await get_tree().process_frame
 
 	var characters := get_tree().get_nodes_in_group("characters")
-	_expect(characters.size() == 2, "online roster spawns exactly two humans")
-	_expect(get_tree().get_nodes_in_group("human_players").size() == 2, "both online actors are marked human")
+	_expect(characters.size() == roster_size, "online roster spawns all %d participants" % roster_size)
+	_expect(get_tree().get_nodes_in_group("human_players").size() == roster_size, "every online actor is marked human")
 	_expect(get_tree().get_nodes_in_group("game_mode").size() == 1, "online match creates one mode")
 	var host := session.call("get_character", NetworkProtocol.HOST_PEER_ID) as CharacterController
-	var guest := session.call("get_character", NetworkProtocol.GUEST_PEER_ID) as CharacterController
+	var guest := session.call("get_character", NetworkProtocol.FIRST_GUEST_PEER_ID) as CharacterController
 	_expect(host != null and host.is_locally_controlled(), "host owns the local character")
 	_expect(guest != null and guest.control_source == CharacterController.ControlSource.REMOTE_INPUT, "host simulates guest input")
+
+	# Only three character sprites exist, so colour is the sole way to tell six
+	# players apart. Every participant must land on a distinct one.
+	var seen_colors: Dictionary = {}
+	var seen_positions: Dictionary = {}
+	for index in roster_size:
+		var participant := session.call("get_character", NetworkProtocol.HOST_PEER_ID + index) as CharacterController
+		_expect(participant != null, "participant %d is registered with the session" % index)
+		if participant == null:
+			continue
+		seen_colors[participant.character_color] = true
+		seen_positions[participant.global_position] = true
+		if index > 0:
+			_expect(
+				participant.control_source == CharacterController.ControlSource.REMOTE_INPUT,
+				"host simulates remote input for participant %d" % index
+			)
+	_expect(seen_colors.size() == roster_size, "all %d participants get distinct colours" % roster_size)
+	_expect(seen_positions.size() == roster_size, "all %d participants get distinct spawn points" % roster_size)
 	var replica := CharacterController.new()
 	replica.control_source = CharacterController.ControlSource.REPLICA
 	get_tree().root.add_child(replica)
