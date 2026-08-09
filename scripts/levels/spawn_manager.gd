@@ -58,18 +58,38 @@ func spawn_online_roster(config: Dictionary) -> Dictionary:
 	for index in participants.size():
 		var participant: Dictionary = participants[index]
 		var peer_id := int(participant.get("peer_id", 0))
+		var is_bot := bool(participant.get("is_bot", false))
+		# A bot is host-simulated and replicated like any other character, so it
+		# needs no netcode of its own: the host drives it through the same
+		# set_ai_inputs() contract remote input uses, and guests interpolate it.
 		var source := CharacterController.ControlSource.REPLICA
-		if peer_id == NetworkSession.local_peer_id:
+		if is_bot:
+			if NetworkSession.is_host():
+				source = CharacterController.ControlSource.CPU
+		elif peer_id == NetworkSession.local_peer_id:
 			source = CharacterController.ControlSource.LOCAL_HUMAN
 		elif NetworkSession.is_host():
 			source = CharacterController.ControlSource.REMOTE_INPUT
 
-		var character := PLAYER_SCENE.instantiate() as CharacterController
+		# Bots use NPC_SCENE on both sides. The two scenes differ in collision
+		# shape offset, so mixing them across host and guest would put the peers
+		# on subtly different physics.
+		var scene := NPC_SCENE if is_bot else PLAYER_SCENE
+		var character := scene.instantiate() as CharacterController
+		if is_bot and not NetworkSession.is_host():
+			# Free rather than queue_free: a queued node still runs _ready() when
+			# its parent enters the tree, which would start an AI brain on a
+			# replica the host is already driving.
+			var brain := character.get_node_or_null("CPUController")
+			if brain:
+				character.remove_child(brain)
+				brain.free()
 		character.configure_participant(
 			peer_id,
 			source,
 			str(participant.get("character_id", "tux")),
-			int(participant.get("color_slot", index))
+			int(participant.get("color_slot", index)),
+			is_bot
 		)
 		character.global_position = _spawn_points[index].global_position
 		# Colour comes from the participant's slot, not from host-vs-guest: with

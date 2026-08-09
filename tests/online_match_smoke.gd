@@ -18,15 +18,20 @@ func _run() -> void:
 		_expect(int(bounds["min"]) == prototype.goal_min(), "%s goal floor matches its prototype" % mode_id)
 		_expect(int(bounds["max"]) == prototype.goal_max(), "%s goal ceiling matches its prototype" % mode_id)
 
-	# A full six-player roster, so the spawn, colour, and registration paths are
-	# exercised at the maximum rather than at the degenerate two-player case.
+	# A full six-slot roster of two humans plus four bots: the shape a real room
+	# is most likely to take, and it exercises spawn, colour, registration, and
+	# the bot path at the maximum rather than the degenerate two-player case.
 	var roster_size := NetworkProtocol.MAX_PLAYERS
+	var human_count := 2
 	var participants: Array = []
 	for index in roster_size:
+		var is_bot := index >= human_count
 		participants.append({
-			"peer_id": NetworkProtocol.HOST_PEER_ID + index,
+			"peer_id": NetworkProtocol.bot_id_for_slot(index - human_count) if is_bot \
+				else NetworkProtocol.HOST_PEER_ID + index,
 			"character_id": NetworkProtocol.CHARACTERS[index % NetworkProtocol.CHARACTERS.size()],
 			"color_slot": index,
+			"is_bot": is_bot,
 		})
 	var config := {
 		"protocol_version": NetworkProtocol.VERSION,
@@ -46,7 +51,10 @@ func _run() -> void:
 
 	var characters := get_tree().get_nodes_in_group("characters")
 	_expect(characters.size() == roster_size, "online roster spawns all %d participants" % roster_size)
-	_expect(get_tree().get_nodes_in_group("human_players").size() == roster_size, "every online actor is marked human")
+	_expect(
+		get_tree().get_nodes_in_group("human_players").size() == human_count,
+		"only the %d humans are marked human" % human_count
+	)
 	_expect(get_tree().get_nodes_in_group("game_mode").size() == 1, "online match creates one mode")
 	var host := session.call("get_character", NetworkProtocol.HOST_PEER_ID) as CharacterController
 	var guest := session.call("get_character", NetworkProtocol.FIRST_GUEST_PEER_ID) as CharacterController
@@ -57,20 +65,42 @@ func _run() -> void:
 	# players apart. Every participant must land on a distinct one.
 	var seen_colors: Dictionary = {}
 	var seen_positions: Dictionary = {}
-	for index in roster_size:
-		var participant := session.call("get_character", NetworkProtocol.HOST_PEER_ID + index) as CharacterController
-		_expect(participant != null, "participant %d is registered with the session" % index)
+	var live_brains := 0
+	for entry in participants:
+		var participant := session.call("get_character", int((entry as Dictionary).peer_id)) as CharacterController
+		_expect(participant != null, "participant %d is registered" % int((entry as Dictionary).peer_id))
 		if participant == null:
 			continue
 		seen_colors[participant.character_color] = true
 		seen_positions[participant.global_position] = true
-		if index > 0:
+		var is_bot := bool((entry as Dictionary).is_bot)
+		_expect(participant.is_bot == is_bot, "participant %d agrees about being a bot" % participant.participant_id)
+		_expect(participant.is_human != is_bot, "participant %d humanity matches the roster" % participant.participant_id)
+		if is_bot:
+			# The host drives bots locally through the AI brain; nothing about
+			# them ever arrives over the wire.
+			_expect(
+				participant.control_source == CharacterController.ControlSource.CPU,
+				"host simulates bot %d locally" % participant.participant_id
+			)
+			if participant.get_node_or_null("CPUController") != null:
+				live_brains += 1
+		elif participant.participant_id != NetworkProtocol.HOST_PEER_ID:
 			_expect(
 				participant.control_source == CharacterController.ControlSource.REMOTE_INPUT,
-				"host simulates remote input for participant %d" % index
+				"host simulates remote input for peer %d" % participant.participant_id
 			)
 	_expect(seen_colors.size() == roster_size, "all %d participants get distinct colours" % roster_size)
 	_expect(seen_positions.size() == roster_size, "all %d participants get distinct spawn points" % roster_size)
+	_expect(live_brains == roster_size - human_count, "every bot has an AI brain on the host")
+
+	# The four host->guest broadcasts used to gate on is_human, which is false
+	# for a CPU. Bots would have moved on guests but never died, respawned, or
+	# scored. Roster membership is the predicate that actually matters.
+	for entry in participants:
+		var participant := session.call("get_character", int((entry as Dictionary).peer_id)) as CharacterController
+		if participant:
+			_expect(session.call("_is_replicated", participant), "bot and human lifecycles both replicate")
 	var replica := CharacterController.new()
 	replica.control_source = CharacterController.ControlSource.REPLICA
 	get_tree().root.add_child(replica)

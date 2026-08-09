@@ -760,6 +760,43 @@ func _next_free_color_slot() -> int:
 			return slot
 	return 0
 
+## Host-only. Bots fill spare roster slots so a six-player match does not need
+## six humans. They are always ready, since nobody is waiting on them.
+func add_bot() -> void:
+	if not is_host() or state != SessionState.LOBBY:
+		return
+	var players := _lobby_players()
+	if players.size() >= NetworkProtocol.MAX_PLAYERS:
+		return
+	players.append(_new_player(_next_free_bot_id(), GameSettings.get_cpu_character(), true))
+	_lobby["players"] = players
+	_broadcast_lobby()
+
+func remove_bot() -> void:
+	if not is_host() or state != SessionState.LOBBY:
+		return
+	var players := _lobby_players()
+	for index in range(players.size() - 1, -1, -1):
+		if bool((players[index] as Dictionary).get("is_bot", false)):
+			players.remove_at(index)
+			_lobby["players"] = players
+			_broadcast_lobby()
+			return
+
+func bot_count() -> int:
+	var total := 0
+	for player in _lobby_players():
+		if bool((player as Dictionary).get("is_bot", false)):
+			total += 1
+	return total
+
+func _next_free_bot_id() -> int:
+	for slot in NetworkProtocol.MAX_PLAYERS:
+		var candidate := NetworkProtocol.bot_id_for_slot(slot)
+		if _lobby_player(candidate).is_empty():
+			return candidate
+	return NetworkProtocol.bot_id_for_slot(0)
+
 func _add_lobby_player(peer_id: int) -> void:
 	if not _lobby_player(peer_id).is_empty():
 		return
@@ -839,8 +876,14 @@ func _send_snapshot() -> void:
 	if states.size() >= 2:
 		_receive_snapshot.rpc(states)
 
+## Whether this character's lifecycle and score belong on the wire. Every
+## registered participant qualifies, bots included -- they are simulated by the
+## host exactly like a remote human, and guests only ever see them replicated.
+func _is_replicated(character: CharacterController) -> bool:
+	return character != null and _characters.has(character.participant_id)
+
 func _on_character_killed(killer: CharacterController, victim: CharacterController) -> void:
-	if not is_host() or state != SessionState.PLAYING or not victim.is_human:
+	if not is_host() or state != SessionState.PLAYING or not _is_replicated(victim):
 		return
 	_death_announced[victim.get_instance_id()] = true
 	_receive_lifecycle.rpc(
@@ -851,7 +894,7 @@ func _on_character_killed(killer: CharacterController, victim: CharacterControll
 	)
 
 func _on_character_died(character: CharacterController) -> void:
-	if not is_host() or state != SessionState.PLAYING or not character.is_human:
+	if not is_host() or state != SessionState.PLAYING or not _is_replicated(character):
 		return
 	var instance_id := character.get_instance_id()
 	if _death_announced.erase(instance_id):
@@ -859,11 +902,11 @@ func _on_character_died(character: CharacterController) -> void:
 	_receive_lifecycle.rpc("death", character.participant_id, 0, character.global_position)
 
 func _on_character_respawned(character: CharacterController) -> void:
-	if is_host() and state == SessionState.PLAYING and character.is_human:
+	if is_host() and state == SessionState.PLAYING and _is_replicated(character):
 		_receive_lifecycle.rpc("respawn", character.participant_id, 0, character.global_position)
 
 func _on_mode_score_changed(character: CharacterController, value: int) -> void:
-	if is_host() and state == SessionState.PLAYING and character.is_human:
+	if is_host() and state == SessionState.PLAYING and _is_replicated(character):
 		_receive_score.rpc(character.participant_id, value)
 
 func _on_match_ended(winner: CharacterController) -> void:

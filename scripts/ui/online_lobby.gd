@@ -31,11 +31,14 @@ const SpawnManagerScript := preload("res://scripts/levels/spawn_manager.gd")
 
 var _local_ready := false
 var _player_list: VBoxContainer
+var _add_bot_button: Button
+var _remove_bot_button: Button
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	visible = false
 	_build_player_list_container()
+	_build_bot_controls()
 	_create_button.pressed.connect(NetworkSession.create_room)
 	_join_button.pressed.connect(_on_join_pressed)
 	_back_button.pressed.connect(hide)
@@ -117,6 +120,24 @@ func _build_player_list_container() -> void:
 	_player_list.add_theme_constant_override("separation", 4)
 	_player_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(_player_list)
+
+## Host-only controls for filling spare slots with CPUs, added next to the
+## roster so the count and the buttons that change it sit together.
+func _build_bot_controls() -> void:
+	if _player_list == null:
+		return
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_add_bot_button = Button.new()
+	_add_bot_button.text = "+ CPU"
+	_add_bot_button.pressed.connect(NetworkSession.add_bot)
+	_remove_bot_button = Button.new()
+	_remove_bot_button.text = "− CPU"
+	_remove_bot_button.pressed.connect(NetworkSession.remove_bot)
+	row.add_child(_add_bot_button)
+	row.add_child(_remove_bot_button)
+	_player_list.get_parent().add_child(row)
 
 func _rebuild_player_list() -> void:
 	if _player_list == null:
@@ -200,6 +221,12 @@ func _update_view() -> void:
 	_prev_character.disabled = not in_lobby
 	_next_character.disabled = not in_lobby
 	var host_controls := NetworkSession.is_host() and in_lobby
+	if _add_bot_button:
+		var roster := _players()
+		_add_bot_button.visible = NetworkSession.is_host()
+		_remove_bot_button.visible = NetworkSession.is_host()
+		_add_bot_button.disabled = not host_controls or roster.size() >= NetworkProtocol.MAX_PLAYERS
+		_remove_bot_button.disabled = not host_controls or NetworkSession.bot_count() == 0
 	_prev_level.disabled = not host_controls
 	_next_level.disabled = not host_controls
 	_minus_goal.disabled = not host_controls

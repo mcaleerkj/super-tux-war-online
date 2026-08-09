@@ -30,6 +30,9 @@ enum ControlSource {
 # use 0; online humans use their WebRTC peer IDs (host 1, guest 2).
 var participant_id: int = 0
 var is_human: bool = false
+## Set from the match roster rather than derived from control source, so host
+## and guests agree about which participants are CPUs.
+var is_bot: bool = false
 var participant_color_slot: int = 0
 
 var _buffered_input: Dictionary = _neutral_input()
@@ -163,10 +166,14 @@ func set_network_input(input_frame: Dictionary) -> void:
 	next["jump_released"] = bool(next.get("jump_released", false)) or bool(_buffered_input.get("jump_released", false))
 	_buffered_input = next
 
-func configure_participant(peer_id: int, source: int, asset_name: String, color_slot: int) -> void:
+func configure_participant(peer_id: int, source: int, asset_name: String, color_slot: int, bot: bool = false) -> void:
 	participant_id = peer_id
 	control_source = source
-	is_human = source != ControlSource.CPU
+	is_bot = bot
+	# Humanity is a roster fact, not a control-source one. The same bot is CPU on
+	# the host and REPLICA on every guest, so inferring it from the source would
+	# make the peers disagree about who is a player.
+	is_human = not bot
 	is_player = source == ControlSource.LOCAL_HUMAN
 	participant_color_slot = color_slot
 	character_asset_name = asset_name
