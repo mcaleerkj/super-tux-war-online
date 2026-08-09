@@ -4,6 +4,7 @@ class_name NetworkProtocol
 const VERSION := 2
 const HOST_PEER_ID := 1
 const FIRST_GUEST_PEER_ID := 2
+const MIN_PLAYERS := 2
 const MAX_PLAYERS := 6
 ## Deprecated alias for the first guest slot. Retained while the session layer
 ## still addresses a single guest; remove once every send is roster-driven.
@@ -114,7 +115,7 @@ static func validate_match_config(value: Variant) -> bool:
 	if not participants is Array:
 		return false
 	var roster := participants as Array
-	if roster.size() < 2 or roster.size() > MAX_PLAYERS:
+	if roster.size() < MIN_PLAYERS or roster.size() > MAX_PLAYERS:
 		return false
 	var seen: Dictionary = {}
 	for participant in roster:

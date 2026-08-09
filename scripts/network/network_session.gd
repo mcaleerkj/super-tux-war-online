@@ -93,14 +93,20 @@ func _process(_delta: float) -> void:
 			_fail("The online connection timed out. Please try again.")
 		return
 	if state == SessionState.PLAYING:
-		# Still fatal for any silent peer, matching today's behaviour. Splitting
-		# this into "drop that guest, keep playing" is the next step.
+		var now := Time.get_ticks_msec()
 		for peer_id: int in _remote_tracks.keys():
 			var track: Dictionary = _remote_tracks[peer_id]
 			var since := int(track.get("data_msec", 0))
-			if since > 0 and Time.get_ticks_msec() - since > NetworkProtocol.DISCONNECT_TIMEOUT_MSEC:
+			if since <= 0 or now - since <= NetworkProtocol.DISCONNECT_TIMEOUT_MSEC:
+				continue
+			# A silent guest costs only that guest; a silent host ends the match,
+			# because nothing else is authoritative. Returning immediately keeps
+			# the iteration safe against the erase inside _drop_participant.
+			if is_host():
+				_drop_participant(peer_id, "A player timed out.")
+			else:
 				_abort_for_disconnect("The connection timed out. Keep the game window active while playing.")
-				return
+			return
 
 func _physics_process(_delta: float) -> void:
 	if state != SessionState.PLAYING or not is_host():
@@ -504,7 +510,19 @@ func _receive_return_to_lobby() -> void:
 
 @rpc("any_peer", "call_remote", "reliable", 0)
 func _remote_leave() -> void:
-	_abort_for_disconnect("Your friend left the room.")
+	# Broadcast with no sender check, this used to tear the session down for
+	# everyone the moment any one guest quit.
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == NetworkProtocol.HOST_PEER_ID:
+		_abort_for_disconnect("The host left the room.")
+		return
+	if not is_host() or not _is_remote_participant(sender):
+		return
+	if state in [SessionState.WAITING, SessionState.LOBBY]:
+		_remove_lobby_player(sender)
+		_broadcast_lobby()
+	else:
+		_drop_participant(sender, "A player left the match.")
 
 func _can_begin_connection() -> bool:
 	if not is_supported_platform():
@@ -720,8 +738,55 @@ func _on_peer_connected(peer_id: int) -> void:
 		_broadcast_lobby()
 
 func _on_peer_disconnected(peer_id: int) -> void:
-	if NetworkProtocol.is_peer_id(peer_id) and has_active_session():
-		_abort_for_disconnect("Your friend disconnected.")
+	if not has_active_session() or not NetworkProtocol.is_peer_id(peer_id):
+		return
+	if peer_id == NetworkProtocol.HOST_PEER_ID:
+		# Only the host is authoritative, so losing it ends the match for
+		# everyone. Host migration is deliberately out of scope.
+		_abort_for_disconnect("The host left the match.")
+		return
+	if not is_host():
+		# Star topology: a guest is only ever connected to the host, so it never
+		# observes another guest leaving. The host tells it.
+		return
+	if state in [SessionState.WAITING, SessionState.LOBBY]:
+		_remove_lobby_player(peer_id)
+		_broadcast_lobby()
+		return
+	_drop_participant(peer_id, "A player disconnected.")
+
+## Host-side. Removes one guest from the running match and tells the rest, so a
+## single dropout costs that player rather than the whole session.
+func _drop_participant(peer_id: int, message: String) -> void:
+	if not is_host():
+		return
+	_receive_participant_left.rpc(peer_id, message)
+	_apply_participant_left(peer_id, message)
+
+@rpc("authority", "call_remote", "reliable", 0)
+func _receive_participant_left(peer_id: int, message: String) -> void:
+	if not is_host():
+		_apply_participant_left(peer_id, message)
+
+func _apply_participant_left(peer_id: int, message: String) -> void:
+	_remote_tracks.erase(peer_id)
+	_scene_ready.erase(peer_id)
+	_rematch_votes.erase(peer_id)
+	_remove_lobby_player(peer_id)
+	var character := get_character(peer_id)
+	_characters.erase(peer_id)
+	if character:
+		character.queue_free()
+	# Passive, unlike friend_disconnected: the match is still going, so this must
+	# not put a modal over it.
+	EventBus.ui_notification.emit(message, "warning")
+	if is_host():
+		if state == SessionState.LOADING:
+			_maybe_begin_countdown()
+		elif state == SessionState.ENDED:
+			_maybe_start_rematch()
+	if _characters.size() < NetworkProtocol.MIN_PLAYERS:
+		_abort_for_disconnect("Not enough players to continue.")
 
 func _default_lobby() -> Dictionary:
 	var selected_path := NetworkProtocol.level_path_from_id("level01")

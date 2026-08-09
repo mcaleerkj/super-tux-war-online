@@ -120,6 +120,25 @@ func _run() -> void:
 	_expect(lobby_button.visible, "host game-over screen offers lobby settings")
 	game_over.queue_free()
 	await get_tree().process_frame
+
+	# Last, because losing enough players tears the session down: a guest
+	# leaving mid-match must cost only that guest. Any disconnect used to end
+	# the session for everyone still playing.
+	session.set("state", 7) # NetworkSession.SessionState.PLAYING
+	var departing := int((participants[1] as Dictionary).peer_id)
+	session.call("_apply_participant_left", departing, "A player disconnected.")
+	await get_tree().process_frame
+	_expect(session.call("get_character", departing) == null, "a dropped peer leaves the roster")
+	_expect(int(session.get("state")) == 7, "the match survives one guest leaving")
+	_expect(
+		get_tree().get_nodes_in_group("characters").size() == roster_size - 1,
+		"the remaining %d characters keep playing" % (roster_size - 1)
+	)
+	# Below two participants there is nothing left to play, so it does end.
+	for entry in participants.slice(2):
+		session.call("_apply_participant_left", int((entry as Dictionary).peer_id), "gone")
+	_expect(int(session.get("state")) != 7, "the match ends once too few players remain")
+
 	if _failures == 0:
 		print("[Tests] online match smoke test passed")
 	get_tree().quit(_failures)
