@@ -5,7 +5,7 @@ Website: https://supertuxwar.com
 
 <div align="center">
 
-### 🎮 [**PLAY NOW IN YOUR BROWSER**](https://mcaleerkj.github.io/super-campaign-war/) 🎮
+### 🎮 [**PLAY NOW IN YOUR BROWSER**](https://mcaleerkj.github.io/super-tux-war-online/) 🎮
 
 </div>
 

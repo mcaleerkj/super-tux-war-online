@@ -38,7 +38,7 @@ Component-based character architecture for players and NPCs.
 ## 🎮 Quick Links
 
 - [Main README](../README.md) - Project overview and game design
-- [Play in Browser](https://mcaleerkj.github.io/super-campaign-war/)
+- [Play in Browser](https://mcaleerkj.github.io/super-tux-war-online/)
 - [Godot 4.7.1 Documentation](https://docs.godotengine.org/en/4.7/)
 
 ## 📖 About This Documentation

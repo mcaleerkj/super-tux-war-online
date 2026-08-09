@@ -28,7 +28,7 @@ Thanks for your interest in contributing! This document provides guidelines for 
 1. **Fork the repository** on GitHub
 2. **Clone your fork**:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/super-tux-war.git
+   git clone https://github.com/YOUR_USERNAME/super-tux-war-online.git
    cd super-tux-war
    ```
 3. **Open in Godot**:
@@ -64,7 +64,7 @@ Thanks for your interest in contributing! This document provides guidelines for 
 
 ### Finding Work
 
-- Check [GitHub Issues](https://github.com/mcaleerkj/super-campaign-war/issues) for open tasks
+- Check [GitHub Issues](https://github.com/mcaleerkj/super-tux-war-online/issues) for open tasks
 - Look for issues labeled `good first issue` or `help wanted`
 - Check the [ROADMAP.md](ROADMAP.md) for planned features
 - See [What We Need](#what-we-need) below for specific asset requests
@@ -483,8 +483,8 @@ Fixes #123, relates to #456
 
 ## Questions?
 
-- **GitHub Discussions**: https://github.com/mcaleerkj/super-campaign-war/discussions
-- **Issues**: https://github.com/mcaleerkj/super-campaign-war/issues
+- **Discord**: https://discord.gg/J8eEp6dsHx
+- **Issues**: https://github.com/mcaleerkj/super-tux-war-online/issues
 
 ---
 

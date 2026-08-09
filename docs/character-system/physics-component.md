@@ -460,5 +460,5 @@ print("  Dropping Through: ", is_dropping_through)
 
 **See Also**:
 - [character_physics.gd](../../scripts/characters/components/character_physics.gd) - Full source code
-- [Super Mario War Physics](http://supermariowar.supersanctuary.net/) - Inspiration
+- [Super Mario War](https://github.com/mmatyas/supermariowar) - Inspiration
 
