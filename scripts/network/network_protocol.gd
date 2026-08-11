@@ -1,18 +1,9 @@
 extends RefCounted
 class_name NetworkProtocol
 
-const VERSION := 2
+const VERSION := 1
 const HOST_PEER_ID := 1
-const FIRST_GUEST_PEER_ID := 2
-const MIN_PLAYERS := 2
-const MAX_PLAYERS := 6
-## Deprecated alias for the first guest slot. Retained while the session layer
-## still addresses a single guest; remove once every send is roster-driven.
-const GUEST_PEER_ID := FIRST_GUEST_PEER_ID
-## Bots fill roster slots but never hold a network peer id. Keeping their ids in
-## a disjoint range means a bot can never be mistaken for a connected peer when
-## validating an RPC sender.
-const BOT_ID_BASE := 101
+const GUEST_PEER_ID := 2
 const ROOM_CODE_LENGTH := 8
 const MAX_SIGNAL_MESSAGE_BYTES := 65_536
 const INPUT_HISTORY_SIZE := 3
@@ -23,22 +14,8 @@ const HANDSHAKE_TIMEOUT_MSEC := 20_000
 const MAX_SIGNAL_RECONNECT_ATTEMPTS := 3
 const MAX_CACHED_ICE_CANDIDATES := 64
 const CHARACTERS := ["tux", "beasty", "gopher"]
-
-## Modes whose host->guest state sync actually exists, with the goal bounds the
-## wire will accept. Grows one entry at a time as each mode lands, and is
-## deliberately separate from ModeRegistry.MODE_IDS so the lobby can never offer
-## a mode the wire cannot yet carry.
-##
-## The bounds are duplicated from the mode prototypes rather than read from them:
-## this validator must stay loadable without the autoloads (ModeRegistry pulls in
-## GameMode, which references EventBus, which does not exist in a `--script`
-## test run). `online_match_smoke.gd` asserts the two never drift apart.
-const ONLINE_MODE_GOALS := {
-	&"frag": {"min": 3, "max": 50},
-}
-
-static func is_online_mode(id: StringName) -> bool:
-	return ONLINE_MODE_GOALS.has(id)
+const FRAG_GOAL_MIN := 3
+const FRAG_GOAL_MAX := 50
 
 const LEVELS := {
 	"level01": "res://scenes/levels/level01.tscn",
@@ -68,33 +45,16 @@ static func level_id_from_path(path: String) -> String:
 static func level_path_from_id(id: String) -> String:
 	return str(LEVELS.get(id, ""))
 
-## True for a network peer slot (host plus up to MAX_PLAYERS-1 guests).
-static func is_peer_id(value: int) -> bool:
-	return value >= HOST_PEER_ID and value <= MAX_PLAYERS
-
-## True for a bot roster slot. Disjoint from the peer id range by construction.
-static func is_bot_id(value: int) -> bool:
-	return value >= BOT_ID_BASE and value < BOT_ID_BASE + MAX_PLAYERS
-
-static func bot_id_for_slot(slot: int) -> int:
-	return BOT_ID_BASE + slot
-
 static func validate_participant(value: Variant) -> bool:
 	if not value is Dictionary:
 		return false
 	var participant := value as Dictionary
-	var participant_id := int(participant.get("peer_id", 0))
+	var peer_id := int(participant.get("peer_id", 0))
 	var character_id := str(participant.get("character_id", ""))
 	var color_slot := int(participant.get("color_slot", -1))
-	if character_id not in CHARACTERS:
-		return false
-	if color_slot < 0 or color_slot >= MAX_PLAYERS:
-		return false
-	# A bot must carry a bot id and a human must carry a peer id, so the roster
-	# alone is enough to decide whether an RPC sender is a real participant.
-	if bool(participant.get("is_bot", false)):
-		return is_bot_id(participant_id)
-	return is_peer_id(participant_id)
+	return peer_id in [HOST_PEER_ID, GUEST_PEER_ID] \
+		and character_id in CHARACTERS \
+		and color_slot in [0, 1]
 
 static func validate_match_config(value: Variant) -> bool:
 	if not value is Dictionary:
@@ -102,30 +62,22 @@ static func validate_match_config(value: Variant) -> bool:
 	var config := value as Dictionary
 	if int(config.get("protocol_version", 0)) != VERSION:
 		return false
-	var mode_id := StringName(str(config.get("mode_id", "")))
-	if not is_online_mode(mode_id):
+	if str(config.get("mode_id", "")) != "frag":
 		return false
 	if level_path_from_id(str(config.get("level_id", ""))) == "":
 		return false
-	var bounds: Dictionary = ONLINE_MODE_GOALS[mode_id]
 	var goal := int(config.get("goal", 0))
-	if goal < int(bounds["min"]) or goal > int(bounds["max"]):
+	if goal < FRAG_GOAL_MIN or goal > FRAG_GOAL_MAX:
 		return false
 	var participants: Variant = config.get("participants", [])
-	if not participants is Array:
-		return false
-	var roster := participants as Array
-	if roster.size() < MIN_PLAYERS or roster.size() > MAX_PLAYERS:
+	if not participants is Array or participants.size() != 2:
 		return false
 	var seen: Dictionary = {}
-	for participant in roster:
+	for participant in participants:
 		if not validate_participant(participant):
 			return false
-		var participant_id := int((participant as Dictionary).get("peer_id", 0))
-		if seen.has(participant_id):
-			return false
-		seen[participant_id] = true
-	return seen.has(HOST_PEER_ID)
+		seen[int(participant.get("peer_id", 0))] = true
+	return seen.has(HOST_PEER_ID) and seen.has(GUEST_PEER_ID)
 
 static func sanitize_input(value: Variant) -> Dictionary:
 	if not value is Dictionary:

@@ -171,9 +171,6 @@ func _pick_target() -> CharacterController:
 	var best: CharacterController = null
 	var best_dist := INF
 	for other in _cached_characters:
-		# The cache is rebuilt on an interval, so an entry may already be freed.
-		if not is_instance_valid(other):
-			continue
 		# Skip self
 		if other == character:
 			continue
@@ -403,8 +400,6 @@ func _foot_close_to_node(node: LevelNavigation.NodeEntry) -> bool:
 func _check_danger() -> Dictionary:
 	# Check for danger from any character (players and other NPCs) falling on us
 	for other in _cached_characters:
-		if not is_instance_valid(other):
-			continue
 		# Skip self
 		if other == character:
 			continue
@@ -623,7 +618,7 @@ func _refresh_character_cache() -> void:
 	_cached_characters.clear()
 	var nodes := get_tree().get_nodes_in_group("characters")
 	for node in nodes:
-		if node is CharacterController and is_instance_valid(node):
+		if node is CharacterController:
 			_cached_characters.append(node)
 
 ## Determines if AI should start braking to reach target position

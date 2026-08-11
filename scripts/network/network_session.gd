@@ -56,14 +56,12 @@ var _remote_description_sdp := ""
 var _server_tick := 0
 var _local_input_sequence := 0
 var _local_input_history: Array[Dictionary] = []
-## peer_id -> {received, processed, input_msec, data_msec}. Per remote peer
-## rather than a single set of counters: with several guests, one chatty peer
-## must not refresh the liveness clock for another that has gone silent, and
-## each guest needs its own input sequence acknowledged.
-var _remote_tracks: Dictionary = {}
-## peer_id -> bool, including the local peer. Replaces the host/guest pair so
-## the countdown can wait on however many peers are actually in the match.
-var _scene_ready: Dictionary = {}
+var _last_received_guest_sequence := -1
+var _last_processed_guest_sequence := -1
+var _last_guest_input_msec := 0
+var _last_data_received_msec := 0
+var _host_scene_ready := false
+var _guest_scene_ready := false
 var _death_announced: Dictionary = {}
 var _rematch_votes: Dictionary = {}
 var _state_started_msec := 0
@@ -92,36 +90,19 @@ func _process(_delta: float) -> void:
 		else:
 			_fail("The online connection timed out. Please try again.")
 		return
-	if state == SessionState.PLAYING:
-		var now := Time.get_ticks_msec()
-		for peer_id: int in _remote_tracks.keys():
-			var track: Dictionary = _remote_tracks[peer_id]
-			var since := int(track.get("data_msec", 0))
-			if since <= 0 or now - since <= NetworkProtocol.DISCONNECT_TIMEOUT_MSEC:
-				continue
-			# A silent guest costs only that guest; a silent host ends the match,
-			# because nothing else is authoritative. Returning immediately keeps
-			# the iteration safe against the erase inside _drop_participant.
-			if is_host():
-				_drop_participant(peer_id, "A player timed out.")
-			else:
-				_abort_for_disconnect("The connection timed out. Keep the game window active while playing.")
-			return
+	if state == SessionState.PLAYING and _last_data_received_msec > 0:
+		if Time.get_ticks_msec() - _last_data_received_msec > NetworkProtocol.DISCONNECT_TIMEOUT_MSEC:
+			_abort_for_disconnect("The connection timed out. Keep the game window active while playing.")
 
 func _physics_process(_delta: float) -> void:
 	if state != SessionState.PLAYING or not is_host():
 		return
 	_server_tick += 1
 	var now := Time.get_ticks_msec()
-	# A peer whose packets have stopped arriving keeps its last input applied
-	# rather than drifting, so re-assert the acknowledged sequence for each.
-	for peer_id: int in _remote_tracks.keys():
-		var track: Dictionary = _remote_tracks[peer_id]
-		if now - int(track.get("input_msec", 0)) <= NetworkProtocol.INPUT_STALE_MSEC:
-			continue
-		var character := get_character(peer_id)
-		if character:
-			character.set_network_input({"sequence": int(track.get("processed", -1))})
+	if now - _last_guest_input_msec > NetworkProtocol.INPUT_STALE_MSEC:
+		var guest := get_character(NetworkProtocol.GUEST_PEER_ID)
+		if guest:
+			guest.set_network_input({"sequence": _last_processed_guest_sequence})
 	if _server_tick % NetworkProtocol.SNAPSHOT_INTERVAL_TICKS == 0:
 		_send_snapshot()
 
@@ -157,33 +138,6 @@ func get_character(peer_id: int) -> CharacterController:
 
 func register_match_characters(characters: Dictionary) -> void:
 	_characters = characters.duplicate()
-
-## True when `peer_id` is a connected remote peer this session recognises. Used
-## in place of the old "is it peer 2" checks: with several guests, the question
-## an RPC handler needs answered is membership, not identity. Bots never pass,
-## because nothing ever arrives from them over the wire.
-func _is_remote_participant(peer_id: int) -> bool:
-	if peer_id == 0 or peer_id == local_peer_id or not NetworkProtocol.is_peer_id(peer_id):
-		return false
-	return peer_id in multiplayer.get_peers()
-
-## Peer ids of everyone in the lobby roster, humans only, host first.
-func _lobby_peer_ids() -> Array:
-	var ids: Array = []
-	for player in _lobby_players():
-		if not bool((player as Dictionary).get("is_bot", false)):
-			ids.append(int((player as Dictionary).get("peer_id", 0)))
-	return ids
-
-func _lobby_players() -> Array:
-	var players: Variant = _lobby.get("players", [])
-	return players if players is Array else []
-
-func _lobby_player(peer_id: int) -> Dictionary:
-	for player in _lobby_players():
-		if int((player as Dictionary).get("peer_id", 0)) == peer_id:
-			return player
-	return {}
 
 func create_room() -> void:
 	if not _can_begin_connection():
@@ -227,7 +181,9 @@ func set_local_character(character_id: String) -> void:
 	if character_id not in GameSettings.AVAILABLE_CHARACTERS or state != SessionState.LOBBY:
 		return
 	if is_host():
-		_apply_player_change(local_peer_id, {"character_id": character_id})
+		_lobby["host_character"] = character_id
+		_lobby["host_ready"] = false
+		_lobby["guest_ready"] = false
 		_broadcast_lobby()
 	else:
 		_request_guest_lobby_change.rpc_id(NetworkProtocol.HOST_PEER_ID, {"character_id": character_id})
@@ -252,36 +208,15 @@ func set_ready(ready: bool) -> void:
 	if state != SessionState.LOBBY:
 		return
 	if is_host():
-		_apply_player_change(local_peer_id, {"ready": ready})
+		_lobby["host_ready"] = ready
 		_broadcast_lobby()
 	else:
 		_request_guest_lobby_change.rpc_id(NetworkProtocol.HOST_PEER_ID, {"ready": ready})
 
-## Applies one player's lobby change in place. Changing a character re-arms the
-## whole roster, so nobody starts a match with a line-up they did not agree to.
-func _apply_player_change(peer_id: int, change: Dictionary) -> void:
-	var player := _lobby_player(peer_id)
-	if player.is_empty():
-		return
-	if change.has("character_id"):
-		var character_id := str(change["character_id"])
-		if character_id in GameSettings.AVAILABLE_CHARACTERS:
-			player["character_id"] = character_id
-			for other in _lobby_players():
-				(other as Dictionary)["ready"] = bool((other as Dictionary).get("is_bot", false))
-	if change.has("ready"):
-		player["ready"] = bool(change["ready"])
-
 func can_start_match() -> bool:
-	if not is_host() or state != SessionState.LOBBY:
-		return false
-	var players := _lobby_players()
-	if players.size() < 2 or players.size() > NetworkProtocol.MAX_PLAYERS:
-		return false
-	for player in players:
-		if not bool((player as Dictionary).get("ready", false)):
-			return false
-	return true
+	return is_host() and state == SessionState.LOBBY \
+		and bool(_lobby.get("host_ready", false)) \
+		and bool(_lobby.get("guest_ready", false))
 
 func start_online_match() -> void:
 	if not can_start_match():
@@ -290,16 +225,17 @@ func start_online_match() -> void:
 	if not NetworkProtocol.validate_match_config(_current_match):
 		_fail("The lobby produced an invalid match configuration.")
 		return
-	_scene_ready.clear()
+	_host_scene_ready = false
+	_guest_scene_ready = false
 	_set_state(SessionState.LOADING, "Loading match...")
-	_receive_load_match.rpc(_current_match)
+	_receive_load_match.rpc_id(NetworkProtocol.GUEST_PEER_ID, _current_match)
 	GameStateManager.start_online_match(_current_match)
 
 func notify_scene_ready() -> void:
 	if state != SessionState.LOADING:
 		return
 	if is_host():
-		_scene_ready[local_peer_id] = true
+		_host_scene_ready = true
 		_maybe_begin_countdown()
 	else:
 		_notify_guest_scene_ready.rpc_id(NetworkProtocol.HOST_PEER_ID)
@@ -309,20 +245,10 @@ func notify_match_started() -> void:
 	_server_tick = 0
 	_local_input_sequence = 0
 	_local_input_history.clear()
-	var now := Time.get_ticks_msec()
-	_remote_tracks.clear()
-	for peer_id in multiplayer.get_peers():
-		_reset_track(int(peer_id), now)
-
-## Per-remote-peer counters. Created on demand so a peer that connects mid-lobby
-## is tracked without a separate registration step.
-func _reset_track(peer_id: int, now: int) -> void:
-	_remote_tracks[peer_id] = {"received": -1, "processed": -1, "input_msec": now, "data_msec": now}
-
-func _track(peer_id: int) -> Dictionary:
-	if not _remote_tracks.has(peer_id):
-		_reset_track(peer_id, Time.get_ticks_msec())
-	return _remote_tracks[peer_id]
+	_last_received_guest_sequence = -1
+	_last_processed_guest_sequence = -1
+	_last_guest_input_msec = Time.get_ticks_msec()
+	_last_data_received_msec = Time.get_ticks_msec()
 
 func prepare_local_input(raw_input: Dictionary) -> Dictionary:
 	var frame := raw_input.duplicate()
@@ -356,7 +282,7 @@ func vote_rematch() -> void:
 func return_to_lobby() -> void:
 	if not is_host() or state != SessionState.ENDED:
 		return
-	_receive_return_to_lobby.rpc()
+	_receive_return_to_lobby.rpc_id(NetworkProtocol.GUEST_PEER_ID)
 	_apply_return_to_lobby()
 
 func leave_session(return_to_menu: bool = true) -> void:
@@ -368,10 +294,16 @@ func leave_session(return_to_menu: bool = true) -> void:
 
 @rpc("any_peer", "call_remote", "reliable", 0)
 func _request_guest_lobby_change(change: Dictionary) -> void:
-	var sender := multiplayer.get_remote_sender_id()
-	if not is_host() or not _is_remote_participant(sender) or state != SessionState.LOBBY:
+	if not is_host() or multiplayer.get_remote_sender_id() != NetworkProtocol.GUEST_PEER_ID or state != SessionState.LOBBY:
 		return
-	_apply_player_change(sender, change)
+	if change.has("character_id"):
+		var character_id := str(change.character_id)
+		if character_id in GameSettings.AVAILABLE_CHARACTERS:
+			_lobby["guest_character"] = character_id
+			_lobby["host_ready"] = false
+			_lobby["guest_ready"] = false
+	if change.has("ready"):
+		_lobby["guest_ready"] = bool(change.ready)
 	_broadcast_lobby()
 
 @rpc("authority", "call_remote", "reliable", 0)
@@ -388,15 +320,15 @@ func _receive_load_match(config: Dictionary) -> void:
 		_fail("The host sent an incompatible match configuration.")
 		return
 	_current_match = config.duplicate(true)
-	_scene_ready.clear()
+	_host_scene_ready = false
+	_guest_scene_ready = false
 	_set_state(SessionState.LOADING, "Loading match...")
 	GameStateManager.start_online_match(_current_match)
 
 @rpc("any_peer", "call_remote", "reliable", 0)
 func _notify_guest_scene_ready() -> void:
-	var sender := multiplayer.get_remote_sender_id()
-	if is_host() and _is_remote_participant(sender) and state == SessionState.LOADING:
-		_scene_ready[sender] = true
+	if is_host() and multiplayer.get_remote_sender_id() == NetworkProtocol.GUEST_PEER_ID and state == SessionState.LOADING:
+		_guest_scene_ready = true
 		_maybe_begin_countdown()
 
 @rpc("authority", "call_remote", "reliable", 0)
@@ -407,16 +339,10 @@ func _receive_begin_countdown() -> void:
 
 @rpc("any_peer", "call_remote", "unreliable_ordered", 1)
 func _submit_input_batch(batch: Array) -> void:
-	var sender := multiplayer.get_remote_sender_id()
 	if not is_host() or state != SessionState.PLAYING \
-		or not _is_remote_participant(sender) \
+		or multiplayer.get_remote_sender_id() != NetworkProtocol.GUEST_PEER_ID \
 		or batch.size() > NetworkProtocol.INPUT_HISTORY_SIZE:
 		return
-	var track := _track(sender)
-	# Liveness is refreshed before the "nothing new here" return below: a peer
-	# that is despawned, or whose frames are all replays, is still demonstrably
-	# connected, and treating that as silence would time it out mid-match.
-	track["data_msec"] = Time.get_ticks_msec()
 	var latest: Dictionary = {}
 	var jump_pressed := false
 	var jump_released := false
@@ -425,9 +351,9 @@ func _submit_input_batch(batch: Array) -> void:
 		if frame.is_empty():
 			continue
 		var sequence := int(frame.sequence)
-		if sequence <= int(track.get("received", -1)):
+		if sequence <= _last_received_guest_sequence:
 			continue
-		track["received"] = sequence
+		_last_received_guest_sequence = sequence
 		jump_pressed = jump_pressed or bool(frame.jump_pressed)
 		jump_released = jump_released or bool(frame.jump_released)
 		latest = frame
@@ -435,23 +361,24 @@ func _submit_input_batch(batch: Array) -> void:
 		return
 	latest["jump_pressed"] = jump_pressed
 	latest["jump_released"] = jump_released
-	track["processed"] = int(latest.sequence)
-	track["input_msec"] = Time.get_ticks_msec()
-	var character := get_character(sender)
-	if character:
-		character.set_network_input(latest)
+	_last_processed_guest_sequence = int(latest.sequence)
+	_last_guest_input_msec = Time.get_ticks_msec()
+	_last_data_received_msec = _last_guest_input_msec
+	var guest := get_character(NetworkProtocol.GUEST_PEER_ID)
+	if guest:
+		guest.set_network_input(latest)
 
 @rpc("authority", "call_remote", "unreliable_ordered", 1)
 func _receive_snapshot(states: Array) -> void:
-	if is_host() or state != SessionState.PLAYING or states.size() > NetworkProtocol.MAX_PLAYERS:
+	if is_host() or state != SessionState.PLAYING or states.size() > 2:
 		return
-	_track(NetworkProtocol.HOST_PEER_ID)["data_msec"] = Time.get_ticks_msec()
+	_last_data_received_msec = Time.get_ticks_msec()
 	for value in states:
 		if not value is Dictionary:
 			continue
 		var snapshot := value as Dictionary
 		var peer_id := int(snapshot.get("peer_id", 0))
-		if not _characters.has(peer_id):
+		if peer_id not in [NetworkProtocol.HOST_PEER_ID, NetworkProtocol.GUEST_PEER_ID]:
 			continue
 		if not snapshot.get("position") is Vector2 or not snapshot.get("velocity") is Vector2:
 			continue
@@ -498,9 +425,8 @@ func _receive_match_end(winner_peer_id: int) -> void:
 
 @rpc("any_peer", "call_remote", "reliable", 0)
 func _submit_rematch_vote() -> void:
-	var sender := multiplayer.get_remote_sender_id()
-	if is_host() and state == SessionState.ENDED and _is_remote_participant(sender):
-		_rematch_votes[sender] = true
+	if is_host() and state == SessionState.ENDED and multiplayer.get_remote_sender_id() == NetworkProtocol.GUEST_PEER_ID:
+		_rematch_votes[NetworkProtocol.GUEST_PEER_ID] = true
 		_maybe_start_rematch()
 
 @rpc("authority", "call_remote", "reliable", 0)
@@ -510,19 +436,7 @@ func _receive_return_to_lobby() -> void:
 
 @rpc("any_peer", "call_remote", "reliable", 0)
 func _remote_leave() -> void:
-	# Broadcast with no sender check, this used to tear the session down for
-	# everyone the moment any one guest quit.
-	var sender := multiplayer.get_remote_sender_id()
-	if sender == NetworkProtocol.HOST_PEER_ID:
-		_abort_for_disconnect("The host left the room.")
-		return
-	if not is_host() or not _is_remote_participant(sender):
-		return
-	if state in [SessionState.WAITING, SessionState.LOBBY]:
-		_remove_lobby_player(sender)
-		_broadcast_lobby()
-	else:
-		_drop_participant(sender, "A player left the match.")
+	_abort_for_disconnect("Your friend left the room.")
 
 func _can_begin_connection() -> bool:
 	if not is_supported_platform():
@@ -729,64 +643,16 @@ func _send_signal(message: Dictionary) -> void:
 		_websocket.send_text(JSON.stringify(message))
 
 func _on_peer_connected(peer_id: int) -> void:
-	if not NetworkProtocol.is_peer_id(peer_id) or peer_id == local_peer_id:
+	if peer_id not in [NetworkProtocol.HOST_PEER_ID, NetworkProtocol.GUEST_PEER_ID] or peer_id == local_peer_id:
 		return
-	_reset_track(peer_id, Time.get_ticks_msec())
+	_last_data_received_msec = Time.get_ticks_msec()
 	_set_state(SessionState.LOBBY, "Connected")
 	if is_host():
-		_add_lobby_player(peer_id)
 		_broadcast_lobby()
 
 func _on_peer_disconnected(peer_id: int) -> void:
-	if not has_active_session() or not NetworkProtocol.is_peer_id(peer_id):
-		return
-	if peer_id == NetworkProtocol.HOST_PEER_ID:
-		# Only the host is authoritative, so losing it ends the match for
-		# everyone. Host migration is deliberately out of scope.
-		_abort_for_disconnect("The host left the match.")
-		return
-	if not is_host():
-		# Star topology: a guest is only ever connected to the host, so it never
-		# observes another guest leaving. The host tells it.
-		return
-	if state in [SessionState.WAITING, SessionState.LOBBY]:
-		_remove_lobby_player(peer_id)
-		_broadcast_lobby()
-		return
-	_drop_participant(peer_id, "A player disconnected.")
-
-## Host-side. Removes one guest from the running match and tells the rest, so a
-## single dropout costs that player rather than the whole session.
-func _drop_participant(peer_id: int, message: String) -> void:
-	if not is_host():
-		return
-	_receive_participant_left.rpc(peer_id, message)
-	_apply_participant_left(peer_id, message)
-
-@rpc("authority", "call_remote", "reliable", 0)
-func _receive_participant_left(peer_id: int, message: String) -> void:
-	if not is_host():
-		_apply_participant_left(peer_id, message)
-
-func _apply_participant_left(peer_id: int, message: String) -> void:
-	_remote_tracks.erase(peer_id)
-	_scene_ready.erase(peer_id)
-	_rematch_votes.erase(peer_id)
-	_remove_lobby_player(peer_id)
-	var character := get_character(peer_id)
-	_characters.erase(peer_id)
-	if character:
-		character.queue_free()
-	# Passive, unlike friend_disconnected: the match is still going, so this must
-	# not put a modal over it.
-	EventBus.ui_notification.emit(message, "warning")
-	if is_host():
-		if state == SessionState.LOADING:
-			_maybe_begin_countdown()
-		elif state == SessionState.ENDED:
-			_maybe_start_rematch()
-	if _characters.size() < NetworkProtocol.MIN_PLAYERS:
-		_abort_for_disconnect("Not enough players to continue.")
+	if peer_id in [NetworkProtocol.HOST_PEER_ID, NetworkProtocol.GUEST_PEER_ID] and has_active_session():
+		_abort_for_disconnect("Your friend disconnected.")
 
 func _default_lobby() -> Dictionary:
 	var selected_path := NetworkProtocol.level_path_from_id("level01")
@@ -799,111 +665,29 @@ func _default_lobby() -> Dictionary:
 	return {
 		"protocol_version": NetworkProtocol.VERSION,
 		"room_code": room_code,
-		"mode_id": "frag",
+		"host_character": GameSettings.get_player_character(),
+		"guest_character": "beasty",
 		"level_id": level_id,
 		"goal": GameSettings.get_goal_for_mode(&"frag"),
-		"players": [_new_player(NetworkProtocol.HOST_PEER_ID, GameSettings.get_player_character(), false)],
+		"host_ready": false,
+		"guest_ready": false,
 	}
-
-## Roster entries are ordered by join, and colour slot is assigned by position,
-## which is what keeps six players visually distinct given only three sprites.
-func _new_player(peer_id: int, character_id: String, is_bot: bool) -> Dictionary:
-	return {
-		"peer_id": peer_id,
-		"character_id": character_id,
-		"color_slot": _next_free_color_slot(),
-		"ready": is_bot,
-		"is_bot": is_bot,
-	}
-
-func _next_free_color_slot() -> int:
-	var taken: Dictionary = {}
-	for player in _lobby_players():
-		taken[int((player as Dictionary).get("color_slot", -1))] = true
-	for slot in NetworkProtocol.MAX_PLAYERS:
-		if not taken.has(slot):
-			return slot
-	return 0
-
-## Host-only. Bots fill spare roster slots so a six-player match does not need
-## six humans. They are always ready, since nobody is waiting on them.
-func add_bot() -> void:
-	if not is_host() or state != SessionState.LOBBY:
-		return
-	var players := _lobby_players()
-	if players.size() >= NetworkProtocol.MAX_PLAYERS:
-		return
-	players.append(_new_player(_next_free_bot_id(), GameSettings.get_cpu_character(), true))
-	_lobby["players"] = players
-	_broadcast_lobby()
-
-func remove_bot() -> void:
-	if not is_host() or state != SessionState.LOBBY:
-		return
-	var players := _lobby_players()
-	for index in range(players.size() - 1, -1, -1):
-		if bool((players[index] as Dictionary).get("is_bot", false)):
-			players.remove_at(index)
-			_lobby["players"] = players
-			_broadcast_lobby()
-			return
-
-func bot_count() -> int:
-	var total := 0
-	for player in _lobby_players():
-		if bool((player as Dictionary).get("is_bot", false)):
-			total += 1
-	return total
-
-func _next_free_bot_id() -> int:
-	for slot in NetworkProtocol.MAX_PLAYERS:
-		var candidate := NetworkProtocol.bot_id_for_slot(slot)
-		if _lobby_player(candidate).is_empty():
-			return candidate
-	return NetworkProtocol.bot_id_for_slot(0)
-
-func _add_lobby_player(peer_id: int) -> void:
-	if not _lobby_player(peer_id).is_empty():
-		return
-	var players := _lobby_players()
-	if players.size() >= NetworkProtocol.MAX_PLAYERS:
-		return
-	players.append(_new_player(peer_id, "beasty", false))
-	_lobby["players"] = players
-
-func _remove_lobby_player(peer_id: int) -> void:
-	var players := _lobby_players()
-	for index in range(players.size() - 1, -1, -1):
-		if int((players[index] as Dictionary).get("peer_id", 0)) == peer_id:
-			players.remove_at(index)
-	_lobby["players"] = players
 
 func _build_match_config() -> Dictionary:
-	var participants: Array = []
-	for player in _lobby_players():
-		var entry := player as Dictionary
-		participants.append({
-			"peer_id": int(entry.get("peer_id", 0)),
-			"character_id": str(entry.get("character_id", "tux")),
-			"color_slot": int(entry.get("color_slot", 0)),
-			"is_bot": bool(entry.get("is_bot", false)),
-		})
 	return {
 		"protocol_version": NetworkProtocol.VERSION,
-		"mode_id": str(_lobby.get("mode_id", "frag")),
+		"mode_id": "frag",
 		"level_id": str(_lobby.get("level_id", "level01")),
 		"goal": int(_lobby.get("goal", 10)),
-		"participants": participants,
+		"participants": [
+			{"peer_id": NetworkProtocol.HOST_PEER_ID, "character_id": str(_lobby.get("host_character", "tux")), "color_slot": 0},
+			{"peer_id": NetworkProtocol.GUEST_PEER_ID, "character_id": str(_lobby.get("guest_character", "beasty")), "color_slot": 1},
+		],
 	}
 
-## Bots are always ready; only humans have to re-confirm after a settings change.
-func _set_all_ready(ready: bool) -> void:
-	for player in _lobby_players():
-		var entry := player as Dictionary
-		entry["ready"] = ready or bool(entry.get("is_bot", false))
-
 func _clear_ready_and_broadcast() -> void:
-	_set_all_ready(false)
+	_lobby["host_ready"] = false
+	_lobby["guest_ready"] = false
 	_broadcast_lobby()
 
 func _broadcast_lobby() -> void:
@@ -911,47 +695,34 @@ func _broadcast_lobby() -> void:
 		return
 	_lobby["room_code"] = room_code
 	if multiplayer.has_multiplayer_peer() and state == SessionState.LOBBY:
-		_receive_lobby.rpc(_lobby)
+		_receive_lobby.rpc_id(NetworkProtocol.GUEST_PEER_ID, _lobby)
 	lobby_changed.emit(lobby_snapshot())
 
 func _maybe_begin_countdown() -> void:
-	if not is_host() or state != SessionState.LOADING:
+	if not is_host() or not _host_scene_ready or not _guest_scene_ready:
 		return
-	if not bool(_scene_ready.get(local_peer_id, false)):
-		return
-	for peer_id in multiplayer.get_peers():
-		if not bool(_scene_ready.get(int(peer_id), false)):
-			return
 	_set_state(SessionState.COUNTDOWN, "Match starting...")
-	_receive_begin_countdown.rpc()
+	_receive_begin_countdown.rpc_id(NetworkProtocol.GUEST_PEER_ID)
 	GameStateManager.begin_online_countdown()
 
 func _send_snapshot() -> void:
 	var states: Array = []
-	for peer_id: int in _characters:
+	for peer_id in [NetworkProtocol.HOST_PEER_ID, NetworkProtocol.GUEST_PEER_ID]:
 		var character := get_character(peer_id)
-		if character == null:
-			continue
-		# Each entry carries that peer's own acknowledged input sequence, which
-		# is what lets one broadcast serve every guest: a guest reconciles
-		# against its own entry and treats the rest as replicas. The host and
-		# bots acknowledge nothing, so they carry -1.
-		var track: Dictionary = _remote_tracks.get(peer_id, {})
-		states.append(character.capture_network_state(_server_tick, int(track.get("processed", -1))))
-	if states.size() >= 2:
-		_receive_snapshot.rpc(states)
-
-## Whether this character's lifecycle and score belong on the wire. Every
-## registered participant qualifies, bots included -- they are simulated by the
-## host exactly like a remote human, and guests only ever see them replicated.
-func _is_replicated(character: CharacterController) -> bool:
-	return character != null and _characters.has(character.participant_id)
+		if character:
+			states.append(character.capture_network_state(
+				_server_tick,
+				_last_processed_guest_sequence if peer_id == NetworkProtocol.GUEST_PEER_ID else -1
+			))
+	if states.size() == 2:
+		_receive_snapshot.rpc_id(NetworkProtocol.GUEST_PEER_ID, states)
 
 func _on_character_killed(killer: CharacterController, victim: CharacterController) -> void:
-	if not is_host() or state != SessionState.PLAYING or not _is_replicated(victim):
+	if not is_host() or state != SessionState.PLAYING or not victim.is_human:
 		return
 	_death_announced[victim.get_instance_id()] = true
-	_receive_lifecycle.rpc(
+	_receive_lifecycle.rpc_id(
+		NetworkProtocol.GUEST_PEER_ID,
 		"death",
 		victim.participant_id,
 		killer.participant_id if killer else 0,
@@ -959,52 +730,51 @@ func _on_character_killed(killer: CharacterController, victim: CharacterControll
 	)
 
 func _on_character_died(character: CharacterController) -> void:
-	if not is_host() or state != SessionState.PLAYING or not _is_replicated(character):
+	if not is_host() or state != SessionState.PLAYING or not character.is_human:
 		return
 	var instance_id := character.get_instance_id()
 	if _death_announced.erase(instance_id):
 		return
-	_receive_lifecycle.rpc("death", character.participant_id, 0, character.global_position)
+	_receive_lifecycle.rpc_id(NetworkProtocol.GUEST_PEER_ID, "death", character.participant_id, 0, character.global_position)
 
 func _on_character_respawned(character: CharacterController) -> void:
-	if is_host() and state == SessionState.PLAYING and _is_replicated(character):
-		_receive_lifecycle.rpc("respawn", character.participant_id, 0, character.global_position)
+	if is_host() and state == SessionState.PLAYING and character.is_human:
+		_receive_lifecycle.rpc_id(NetworkProtocol.GUEST_PEER_ID, "respawn", character.participant_id, 0, character.global_position)
 
 func _on_mode_score_changed(character: CharacterController, value: int) -> void:
-	if is_host() and state == SessionState.PLAYING and _is_replicated(character):
-		_receive_score.rpc(character.participant_id, value)
+	if is_host() and state == SessionState.PLAYING and character.is_human:
+		_receive_score.rpc_id(NetworkProtocol.GUEST_PEER_ID, character.participant_id, value)
 
 func _on_match_ended(winner: CharacterController) -> void:
 	if not is_online_match():
 		return
 	var winner_id := winner.participant_id if winner else 0
 	if is_host():
-		_receive_match_end.rpc(winner_id)
+		_receive_match_end.rpc_id(NetworkProtocol.GUEST_PEER_ID, winner_id)
 	_set_state(SessionState.ENDED, "Match complete")
 	_rematch_votes.clear()
 
 func _maybe_start_rematch() -> void:
-	if not is_host():
+	if not is_host() or not _rematch_votes.has(NetworkProtocol.HOST_PEER_ID) \
+		or not _rematch_votes.has(NetworkProtocol.GUEST_PEER_ID):
 		return
-	# Every human still in the room has to want it. A peer that left is no
-	# longer in the roster and so cannot hold the rematch hostage.
-	for peer_id in _lobby_peer_ids():
-		if not _rematch_votes.has(peer_id):
-			return
-	_set_all_ready(true)
+	_lobby["host_ready"] = true
+	_lobby["guest_ready"] = true
 	_set_state(SessionState.LOBBY, "Starting rematch...")
 	start_online_match()
 
 func _lobby_with_rematch() -> Dictionary:
 	var snapshot := lobby_snapshot()
-	snapshot["rematch_votes"] = _rematch_votes.keys()
+	snapshot["host_rematch"] = _rematch_votes.has(NetworkProtocol.HOST_PEER_ID)
+	snapshot["guest_rematch"] = _rematch_votes.has(NetworkProtocol.GUEST_PEER_ID)
 	return snapshot
 
 func _apply_return_to_lobby() -> void:
 	_current_match.clear()
 	_characters.clear()
 	_rematch_votes.clear()
-	_set_all_ready(false)
+	_lobby["host_ready"] = false
+	_lobby["guest_ready"] = false
 	_set_state(SessionState.LOBBY, "Connected")
 	GameStateManager.return_to_menu(true)
 
@@ -1039,8 +809,6 @@ func _reset_transport(reset_identity: bool) -> void:
 	_local_input_history.clear()
 	_death_announced.clear()
 	_rematch_votes.clear()
-	_remote_tracks.clear()
-	_scene_ready.clear()
 	if reset_identity:
 		room_code = ""
 		local_peer_id = 0
