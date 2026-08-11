@@ -47,30 +47,56 @@ func spawn_online_roster(config: Dictionary) -> Dictionary:
 	if not NetworkProtocol.validate_match_config(config):
 		push_error("SpawnManager: rejected invalid online match config")
 		return spawned
-	if _spawn_points.size() < 2:
-		push_error("SpawnManager: online matches require at least two spawn points")
+	# Duplicated so sorting does not reorder the caller's authoritative config.
+	var participants: Array = (config.get("participants", []) as Array).duplicate(true)
+	if _spawn_points.size() < participants.size():
+		push_error("SpawnManager: online matches need one spawn point per participant (%d < %d)" % [
+			_spawn_points.size(), participants.size()
+		])
 		return spawned
-
-	var participants: Array = config.get("participants", [])
 	participants.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a.peer_id) < int(b.peer_id))
 	for index in participants.size():
 		var participant: Dictionary = participants[index]
 		var peer_id := int(participant.get("peer_id", 0))
+		var is_bot := bool(participant.get("is_bot", false))
+		# A bot is host-simulated and replicated like any other character, so it
+		# needs no netcode of its own: the host drives it through the same
+		# set_ai_inputs() contract remote input uses, and guests interpolate it.
 		var source := CharacterController.ControlSource.REPLICA
-		if peer_id == NetworkSession.local_peer_id:
+		if is_bot:
+			if NetworkSession.is_host():
+				source = CharacterController.ControlSource.CPU
+		elif peer_id == NetworkSession.local_peer_id:
 			source = CharacterController.ControlSource.LOCAL_HUMAN
 		elif NetworkSession.is_host():
 			source = CharacterController.ControlSource.REMOTE_INPUT
 
-		var character := PLAYER_SCENE.instantiate() as CharacterController
+		# Bots use NPC_SCENE on both sides. The two scenes differ in collision
+		# shape offset, so mixing them across host and guest would put the peers
+		# on subtly different physics.
+		var scene := NPC_SCENE if is_bot else PLAYER_SCENE
+		var character := scene.instantiate() as CharacterController
+		if is_bot and not NetworkSession.is_host():
+			# Free rather than queue_free: a queued node still runs _ready() when
+			# its parent enters the tree, which would start an AI brain on a
+			# replica the host is already driving.
+			var brain := character.get_node_or_null("CPUController")
+			if brain:
+				character.remove_child(brain)
+				brain.free()
 		character.configure_participant(
 			peer_id,
 			source,
 			str(participant.get("character_id", "tux")),
-			int(participant.get("color_slot", index))
+			int(participant.get("color_slot", index)),
+			is_bot
 		)
 		character.global_position = _spawn_points[index].global_position
-		character.character_color = Color.WHITE if peer_id == NetworkProtocol.HOST_PEER_ID else Color(0.35, 0.85, 1.0)
+		# Colour comes from the participant's slot, not from host-vs-guest: with
+		# only three character sprites, the slot is what keeps a six-player
+		# roster visually distinguishable.
+		var color_slot := int(participant.get("color_slot", index))
+		character.character_color = CPU_COLORS[color_slot % CPU_COLORS.size()]
 		get_parent().add_child(character)
 		character.load_character_animations(character.character_asset_name)
 		var sprite := character.get_node_or_null("AnimatedSprite2D") as AnimatedSprite2D

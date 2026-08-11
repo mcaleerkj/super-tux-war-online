@@ -216,8 +216,9 @@ func start_online_match(config: Dictionary) -> void:
 		return_to_menu()
 		return
 	var characters: Dictionary = spawn_manager.spawn_online_roster(config)
-	if characters.size() != 2:
-		push_error("Online roster did not spawn both players")
+	var expected: int = (config.get("participants", []) as Array).size()
+	if characters.size() != expected:
+		push_error("Online roster spawned %d of %d participants" % [characters.size(), expected])
 		NetworkSession.leave_session(false)
 		return_to_menu()
 		return

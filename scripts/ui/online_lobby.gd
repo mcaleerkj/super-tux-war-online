@@ -25,11 +25,20 @@ extends Control
 @onready var _start_button: Button = %StartOnlineButton
 @onready var _leave_button: Button = %LeaveButton
 
+## Shares the palette the spawner tints characters with, so a lobby swatch is
+## the colour that player actually appears in.
+const SpawnManagerScript := preload("res://scripts/levels/spawn_manager.gd")
+
 var _local_ready := false
+var _player_list: VBoxContainer
+var _add_bot_button: Button
+var _remove_bot_button: Button
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	visible = false
+	_build_player_list_container()
+	_build_bot_controls()
 	_create_button.pressed.connect(NetworkSession.create_room)
 	_join_button.pressed.connect(_on_join_pressed)
 	_back_button.pressed.connect(hide)
@@ -85,10 +94,88 @@ func _normalize_code(value: String) -> void:
 
 func _cycle_character(direction: int) -> void:
 	var characters := GameSettings.AVAILABLE_CHARACTERS
-	var snapshot := NetworkSession.lobby_snapshot()
-	var key := "host_character" if NetworkSession.is_host() else "guest_character"
-	var current := characters.find(str(snapshot.get(key, "tux")))
+	var current := characters.find(str(_local_player().get("character_id", "tux")))
 	NetworkSession.set_local_character(characters[(current + direction + characters.size()) % characters.size()])
+
+func _local_player() -> Dictionary:
+	for player in _players():
+		if int((player as Dictionary).get("peer_id", 0)) == NetworkSession.local_peer_id:
+			return player
+	return {}
+
+func _players() -> Array:
+	var value: Variant = NetworkSession.lobby_snapshot().get("players", [])
+	return value if value is Array else []
+
+## The scene ships two fixed player labels, which cannot show a six-player
+## roster. Swap them for a vertical list built from the roster at runtime.
+func _build_player_list_container() -> void:
+	var row := _host_label.get_parent() as Control
+	if row == null:
+		return
+	_host_label.queue_free()
+	_guest_label.queue_free()
+	_player_list = VBoxContainer.new()
+	_player_list.name = "PlayerList"
+	_player_list.add_theme_constant_override("separation", 4)
+	_player_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(_player_list)
+
+## Host-only controls for filling spare slots with CPUs, added next to the
+## roster so the count and the buttons that change it sit together.
+func _build_bot_controls() -> void:
+	if _player_list == null:
+		return
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_add_bot_button = Button.new()
+	_add_bot_button.text = "+ CPU"
+	_add_bot_button.pressed.connect(NetworkSession.add_bot)
+	_remove_bot_button = Button.new()
+	_remove_bot_button.text = "− CPU"
+	_remove_bot_button.pressed.connect(NetworkSession.remove_bot)
+	row.add_child(_add_bot_button)
+	row.add_child(_remove_bot_button)
+	_player_list.get_parent().add_child(row)
+
+func _rebuild_player_list() -> void:
+	if _player_list == null:
+		return
+	for child in _player_list.get_children():
+		child.queue_free()
+	for player in _players():
+		_player_list.add_child(_build_player_row(player as Dictionary))
+
+func _build_player_row(player: Dictionary) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+
+	var swatch := ColorRect.new()
+	swatch.custom_minimum_size = Vector2(18, 18)
+	swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var palette: Array = SpawnManagerScript.CPU_COLORS
+	swatch.color = palette[int(player.get("color_slot", 0)) % palette.size()]
+	row.add_child(swatch)
+
+	var peer_id := int(player.get("peer_id", 0))
+	var who := "CPU"
+	if not bool(player.get("is_bot", false)):
+		if peer_id == NetworkSession.local_peer_id:
+			who = "You"
+		elif peer_id == NetworkProtocol.HOST_PEER_ID:
+			who = "Host"
+		else:
+			who = "Player %d" % peer_id
+	var label := Label.new()
+	label.custom_minimum_size = Vector2(300, 24)
+	label.text = "%s — %s%s" % [
+		who,
+		GameSettings.get_character_display_name(str(player.get("character_id", "tux"))),
+		"  READY" if bool(player.get("ready", false)) else "",
+	]
+	row.add_child(label)
+	return row
 
 func _on_ready_pressed() -> void:
 	_local_ready = not _local_ready
@@ -122,25 +209,24 @@ func _update_view() -> void:
 	var snapshot := NetworkSession.lobby_snapshot()
 	_room_code_label.text = NetworkSession.room_code
 	_connection_label.text = NetworkSession.status_text
-	_host_label.text = "Host: %s%s" % [
-		GameSettings.get_character_display_name(str(snapshot.get("host_character", "tux"))),
-		"  READY" if bool(snapshot.get("host_ready", false)) else "",
-	]
-	_guest_label.text = "Friend: %s%s" % [
-		GameSettings.get_character_display_name(str(snapshot.get("guest_character", "beasty"))),
-		"  READY" if bool(snapshot.get("guest_ready", false)) else "",
-	]
+	_rebuild_player_list()
 	_level_label.text = str(snapshot.get("level_id", "level01")).capitalize()
 	_goal_label.text = str(snapshot.get("goal", 10))
-	var local_key := "host_character" if NetworkSession.is_host() else "guest_character"
-	_character_label.text = GameSettings.get_character_display_name(str(snapshot.get(local_key, "tux")))
-	_local_ready = bool(snapshot.get("host_ready" if NetworkSession.is_host() else "guest_ready", false))
+	var local_player := _local_player()
+	_character_label.text = GameSettings.get_character_display_name(str(local_player.get("character_id", "tux")))
+	_local_ready = bool(local_player.get("ready", false))
 	_ready_button.text = "Ready ✓" if _local_ready else "Ready"
 	var in_lobby := NetworkSession.state == NetworkSession.SessionState.LOBBY
 	_ready_button.disabled = not in_lobby
 	_prev_character.disabled = not in_lobby
 	_next_character.disabled = not in_lobby
 	var host_controls := NetworkSession.is_host() and in_lobby
+	if _add_bot_button:
+		var roster := _players()
+		_add_bot_button.visible = NetworkSession.is_host()
+		_remove_bot_button.visible = NetworkSession.is_host()
+		_add_bot_button.disabled = not host_controls or roster.size() >= NetworkProtocol.MAX_PLAYERS
+		_remove_bot_button.disabled = not host_controls or NetworkSession.bot_count() == 0
 	_prev_level.disabled = not host_controls
 	_next_level.disabled = not host_controls
 	_minus_goal.disabled = not host_controls

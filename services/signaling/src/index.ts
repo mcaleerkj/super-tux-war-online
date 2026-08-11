@@ -1,5 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  HOST_PEER_ID,
+  MAX_PEERS,
+  MAX_PEER_ID,
   MAX_SIGNAL_BYTES,
   PROTOCOL_VERSION,
   ROOM_TTL_MS,
@@ -12,7 +15,10 @@ import {
   randomRoomCode,
   randomToken,
   sha256,
+  type PeerRecord,
   type Role,
+  type RoomRecord,
+  type SocketAttachment,
 } from "./protocol";
 
 interface Env {
@@ -24,24 +30,6 @@ interface Env {
   TURN_API_TOKEN?: string;
 }
 
-interface RoomRecord {
-  createdAt: number;
-  hardExpiresAt: number;
-  hostSecretHash: string;
-  guestSecretHash?: string;
-  hostTicketHash: string;
-  hostTicketExpiresAt: number;
-  guestTicketHash?: string;
-  guestTicketExpiresAt?: number;
-}
-
-interface SocketAttachment {
-  role: Role;
-  connectedAt: number;
-  /** Set when the same player reconnected and took over this role's slot. */
-  evicted?: boolean;
-}
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const origin = request.headers.get("Origin");
@@ -51,10 +39,10 @@ export default {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, protocol_version: PROTOCOL_VERSION }, 200, origin, env);
+      return json({ ok: true, protocol_version: PROTOCOL_VERSION, max_peers: MAX_PEERS }, 200, origin, env);
     }
     if (request.method === "POST" && url.pathname === "/v1/rooms") {
-      const limited = await env.CREATE_RATE_LIMITER.limit({ key: request.headers.get("CF-Connecting-IP") ?? "local" });
+      const limited = await env.CREATE_RATE_LIMITER.limit({ key: clientKey(request) });
       if (!limited.success) return json({ error: "Too many rooms created. Try again shortly." }, 429, origin, env);
       const protocolError = await validateProtocolBody(request);
       if (protocolError) return json({ error: protocolError }, 400, origin, env);
@@ -64,25 +52,28 @@ export default {
       const roomCode = normalizeRoomCode(parts[2]);
       if (!isRoomCode(roomCode)) return json({ error: "Invalid room code." }, 400, origin, env);
       const stub = env.ROOMS.get(env.ROOMS.idFromName(roomCode));
-      if (request.method === "POST" && parts[3] === "join") {
-        const limited = await env.JOIN_RATE_LIMITER.limit({ key: request.headers.get("CF-Connecting-IP") ?? "local" });
-        if (!limited.success) return json({ error: "Too many join attempts. Try again shortly." }, 429, origin, env);
+      const action = parts[3];
+
+      if (request.method === "POST" && (action === "join" || action === "signal-ticket" || action === "lock" || action === "leave")) {
+        const limited = await env.JOIN_RATE_LIMITER.limit({ key: clientKey(request) });
+        if (!limited.success) return json({ error: "Too many requests. Try again shortly." }, 429, origin, env);
         const protocolError = await validateProtocolBody(request);
         if (protocolError) return json({ error: protocolError }, 400, origin, env);
-        return cors(await joinRoom(request, env, stub, roomCode), origin, env);
+        if (action === "join") return cors(await joinRoom(request, env, stub, roomCode), origin, env);
+        if (action === "signal-ticket") return cors(await refreshTicket(request, stub), origin, env);
+        return cors(await authorizedRoomAction(request, stub, action), origin, env);
       }
-      if (request.method === "POST" && parts[3] === "signal-ticket") {
-        const limited = await env.JOIN_RATE_LIMITER.limit({ key: request.headers.get("CF-Connecting-IP") ?? "local" });
-        if (!limited.success) return json({ error: "Too many signaling attempts. Try again shortly." }, 429, origin, env);
-        return cors(await refreshTicket(request, stub), origin, env);
-      }
-      if (request.method === "GET" && parts[3] === "signal") {
+      if (request.method === "GET" && action === "signal") {
         return stub.fetch(new Request(`https://room.internal/signal${url.search}`, request));
       }
     }
     return json({ error: "Not found." }, 404, origin, env);
   },
 } satisfies ExportedHandler<Env>;
+
+function clientKey(request: Request): string {
+  return request.headers.get("CF-Connecting-IP") ?? "local";
+}
 
 async function createRoom(request: Request, env: Env): Promise<Response> {
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -92,14 +83,11 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
     const stub = env.ROOMS.get(env.ROOMS.idFromName(roomCode));
     const response = await stub.fetch("https://room.internal/create", {
       method: "POST",
-      body: JSON.stringify({
-        hostSecretHash: await sha256(roleSecret),
-        hostTicketHash: await sha256(ticket),
-      }),
+      body: JSON.stringify({ secretHash: await sha256(roleSecret), ticketHash: await sha256(ticket) }),
     });
     if (response.status === 409) continue;
     if (!response.ok) return json({ error: "Could not create the room." }, 502);
-    return roomResponse(request, env, roomCode, roleSecret, ticket, 1);
+    return roomResponse(request, env, roomCode, roleSecret, ticket, HOST_PEER_ID, "host");
   }
   return json({ error: "Could not allocate a unique room code." }, 503);
 }
@@ -114,27 +102,46 @@ async function joinRoom(
   const ticket = randomToken(18);
   const response = await stub.fetch("https://room.internal/join", {
     method: "POST",
-    body: JSON.stringify({
-      guestSecretHash: await sha256(roleSecret),
-      guestTicketHash: await sha256(ticket),
-    }),
+    body: JSON.stringify({ secretHash: await sha256(roleSecret), ticketHash: await sha256(ticket) }),
   });
   if (!response.ok) return new Response(response.body, { status: response.status, headers: response.headers });
-  return roomResponse(request, env, roomCode, roleSecret, ticket, 2);
+  const assigned = await response.json() as { peer_id: number };
+  return roomResponse(request, env, roomCode, roleSecret, ticket, assigned.peer_id, "guest");
 }
 
+/**
+ * Trades a role secret for a fresh single-use ticket. Only the hash reaches the
+ * room, so the plaintext ticket never touches durable storage.
+ */
 async function refreshTicket(request: Request, stub: DurableObjectStub<GameRoom>): Promise<Response> {
-  const authorization = request.headers.get("Authorization") ?? "";
-  if (!authorization.startsWith("Bearer ")) return json({ error: "Missing role secret." }, 401);
+  const secret = bearer(request);
+  if (secret === null) return json({ error: "Missing role secret." }, 401);
   const ticket = randomToken(18);
-  return stub.fetch("https://room.internal/ticket", {
+  const response = await stub.fetch("https://room.internal/ticket", {
     method: "POST",
-    body: JSON.stringify({
-      roleSecretHash: await sha256(authorization.slice(7)),
-      ticketHash: await sha256(ticket),
-      ticket,
-    }),
+    body: JSON.stringify({ secretHash: await sha256(secret), ticketHash: await sha256(ticket) }),
   });
+  if (!response.ok) return response;
+  const assigned = await response.json() as { peer_id: number; role: Role };
+  return json({ signal_ticket: ticket, peer_id: assigned.peer_id, role: assigned.role });
+}
+
+async function authorizedRoomAction(
+  request: Request,
+  stub: DurableObjectStub<GameRoom>,
+  action: string,
+): Promise<Response> {
+  const secret = bearer(request);
+  if (secret === null) return json({ error: "Missing role secret." }, 401);
+  return stub.fetch(`https://room.internal/${action}`, {
+    method: "POST",
+    body: JSON.stringify({ secretHash: await sha256(secret) }),
+  });
+}
+
+function bearer(request: Request): string | null {
+  const authorization = request.headers.get("Authorization") ?? "";
+  return authorization.startsWith("Bearer ") ? authorization.slice(7) : null;
 }
 
 async function roomResponse(
@@ -144,6 +151,7 @@ async function roomResponse(
   roleSecret: string,
   ticket: string,
   peerId: number,
+  role: Role,
 ): Promise<Response> {
   const requestUrl = new URL(request.url);
   const signalingUrl = `${requestUrl.protocol === "https:" ? "wss:" : "ws:"}//${requestUrl.host}/v1/rooms/${roomCode}/signal`;
@@ -156,6 +164,9 @@ async function roomResponse(
   return json({
     room_code: roomCode,
     peer_id: peerId,
+    role,
+    host_peer_id: HOST_PEER_ID,
+    max_peers: MAX_PEERS,
     role_secret: roleSecret,
     signal_ticket: ticket,
     signaling_url: signalingUrl,
@@ -187,8 +198,10 @@ async function generateIceServers(env: Env): Promise<unknown[]> {
 
 async function validateProtocolBody(request: Request): Promise<string | null> {
   try {
-    const body = await request.json() as { protocol_version?: number };
-    return body.protocol_version === PROTOCOL_VERSION ? null : "Incompatible game version.";
+    const body = await request.clone().json() as { protocol_version?: number };
+    return body.protocol_version === PROTOCOL_VERSION
+      ? null
+      : "This game version is out of date. Please refresh the page.";
   } catch {
     return "Invalid JSON body.";
   }
@@ -225,9 +238,13 @@ export class GameRoom extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/create" && request.method === "POST") return this.create(request);
-    if (url.pathname === "/join" && request.method === "POST") return this.join(request);
-    if (url.pathname === "/ticket" && request.method === "POST") return this.ticket(request);
+    if (request.method === "POST") {
+      if (url.pathname === "/create") return this.create(request);
+      if (url.pathname === "/join") return this.join(request);
+      if (url.pathname === "/ticket") return this.ticket(request);
+      if (url.pathname === "/lock") return this.lock(request);
+      if (url.pathname === "/leave") return this.leave(request);
+    }
     if (url.pathname === "/signal" && request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
       return this.connectWebSocket(url);
     }
@@ -235,7 +252,8 @@ export class GameRoom extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
-    for (const socket of this.ctx.getWebSockets()) socket.close(4001, "Room expired");
+    this.broadcast(this.ctx.getWebSockets(), { type: "room_closed", reason: "expired" });
+    for (const socket of this.ctx.getWebSockets()) socket.close(4003, "Room expired");
     await this.ctx.storage.deleteAll();
   }
 
@@ -245,41 +263,79 @@ export class GameRoom extends DurableObject<Env> {
       socket.send(JSON.stringify({ type: "error", message: "Signaling message too large." }));
       return;
     }
+    const attachment = socket.deserializeAttachment() as SocketAttachment | null;
+    if (!attachment || attachment.evicted) return;
+    let message: Record<string, unknown>;
     try {
-      const message = JSON.parse(typeof payload === "string" ? payload : new TextDecoder().decode(payload));
-      if (!isSignalMessage(message)) {
+      const parsed: unknown = JSON.parse(typeof payload === "string" ? payload : new TextDecoder().decode(payload));
+      if (!isSignalMessage(parsed)) {
         socket.send(JSON.stringify({ type: "error", message: "Invalid signaling message." }));
         return;
       }
-      const attachment = socket.deserializeAttachment() as SocketAttachment;
-      const other: Role = attachment.role === "host" ? "guest" : "host";
-      for (const target of this.ctx.getWebSockets(other)) target.send(JSON.stringify(message));
+      message = parsed;
     } catch {
       socket.send(JSON.stringify({ type: "error", message: "Invalid signaling JSON." }));
+      return;
     }
+
+    const from = attachment.peerId;
+    const to = message.to as number;
+    if (to === from) {
+      socket.send(JSON.stringify({ type: "error", message: "Cannot signal yourself." }));
+      return;
+    }
+    // Star topology: guests negotiate only with the host, and only the host
+    // offers. This means a guest can never address another guest, so the only
+    // party that has to trust `from` is the host.
+    if (attachment.role === "guest") {
+      if (to !== HOST_PEER_ID) {
+        socket.send(JSON.stringify({ type: "error", message: "Guests may only signal the host." }));
+        return;
+      }
+      if (message.type === "offer") {
+        socket.send(JSON.stringify({ type: "error", message: "Only the host may offer." }));
+        return;
+      }
+    } else if (to === HOST_PEER_ID || message.type === "answer") {
+      socket.send(JSON.stringify({ type: "error", message: "Invalid signaling target." }));
+      return;
+    }
+
+    // Rebuilt field by field rather than forwarded: the incoming object must
+    // never be able to smuggle extra keys, least of all its own `from`.
+    const relayed = message.type === "ice"
+      ? { type: "ice", from, media: message.media, index: message.index, candidate: message.candidate }
+      : { type: message.type, from, sdp: message.sdp };
+    this.broadcast(this.peerSockets(to), relayed);
   }
 
   async webSocketClose(socket: WebSocket, _code: number, _reason: string): Promise<void> {
     const attachment = socket.deserializeAttachment() as SocketAttachment | null;
-    // An evicted socket belongs to a player who is reconnecting after a
-    // signaling drop, so its peer must not be told that anyone left. The socket
-    // is already closing here; re-closing it with the client's code would throw
-    // on reserved codes such as 1006 (abnormal closure on tab close).
+    // An evicted socket belongs to a peer that is reconnecting, so its peers
+    // must not be told anyone left. The socket is already closing here;
+    // re-closing it with the client's code would throw on reserved codes such
+    // as 1006 (abnormal closure on tab close).
     if (!attachment || attachment.evicted) return;
-    const other: Role = attachment.role === "host" ? "guest" : "host";
-    for (const target of this.ctx.getWebSockets(other)) target.send(JSON.stringify({ type: "peer_left" }));
+    this.announce(attachment.peerId, attachment.role, "peer_left");
   }
 
   private async create(request: Request): Promise<Response> {
     if (await this.ctx.storage.get<RoomRecord>("room")) return json({ error: "Room already exists." }, 409);
-    const body = await request.json() as Pick<RoomRecord, "hostSecretHash" | "hostTicketHash">;
+    const body = await request.json() as { secretHash: string; ticketHash: string };
     const now = Date.now();
     const room: RoomRecord = {
       createdAt: now,
       hardExpiresAt: now + ROOM_TTL_MS,
-      hostSecretHash: body.hostSecretHash,
-      hostTicketHash: body.hostTicketHash,
-      hostTicketExpiresAt: now + TICKET_TTL_MS,
+      nextPeerId: HOST_PEER_ID + 1,
+      peers: {
+        [String(HOST_PEER_ID)]: {
+          role: "host",
+          secretHash: body.secretHash,
+          ticketHash: body.ticketHash,
+          ticketExpiresAt: now + TICKET_TTL_MS,
+          joinedAt: now,
+        },
+      },
     };
     await this.ctx.storage.put("room", room);
     await this.ctx.storage.setAlarm(room.hardExpiresAt);
@@ -289,72 +345,174 @@ export class GameRoom extends DurableObject<Env> {
   private async join(request: Request): Promise<Response> {
     const room = await this.getLiveRoom();
     if (!room) return json({ error: "Room not found or expired." }, 410);
-    if (!room.guestSecretHash && Date.now() - room.createdAt > UNJOINED_TTL_MS) {
+    if (room.lockedAt) return json({ error: "The match has already started.", reason: "locked" }, 409);
+    if (Object.keys(room.peers).length === 1 && Date.now() - room.createdAt > UNJOINED_TTL_MS) {
       return json({ error: "Room expired before a friend joined." }, 410);
     }
-    if (room.guestSecretHash) return json({ error: "Room is full." }, 409);
-    const body = await request.json() as { guestSecretHash: string; guestTicketHash: string };
-    room.guestSecretHash = body.guestSecretHash;
-    room.guestTicketHash = body.guestTicketHash;
-    room.guestTicketExpiresAt = Date.now() + TICKET_TTL_MS;
+    if (Object.keys(room.peers).length >= MAX_PEERS) {
+      return json({ error: "Room is full.", reason: "full" }, 409);
+    }
+    if (room.nextPeerId > MAX_PEER_ID) return json({ error: "Room is worn out. Start a new one." }, 409);
+    const body = await request.json() as { secretHash: string; ticketHash: string };
+    const now = Date.now();
+    const peerId = room.nextPeerId;
+    room.nextPeerId += 1;
+    room.peers[String(peerId)] = {
+      role: "guest",
+      secretHash: body.secretHash,
+      ticketHash: body.ticketHash,
+      ticketExpiresAt: now + TICKET_TTL_MS,
+      joinedAt: now,
+    };
     await this.ctx.storage.put("room", room);
-    return json({ ok: true });
+    return json({ peer_id: peerId });
   }
 
   private async ticket(request: Request): Promise<Response> {
     const room = await this.getLiveRoom();
     if (!room) return json({ error: "Room not found or expired." }, 410);
-    const body = await request.json() as { roleSecretHash: string; ticketHash: string; ticket: string };
-    const now = Date.now();
-    if (body.roleSecretHash === room.hostSecretHash) {
-      room.hostTicketHash = body.ticketHash;
-      room.hostTicketExpiresAt = now + TICKET_TTL_MS;
-    } else if (body.roleSecretHash === room.guestSecretHash) {
-      room.guestTicketHash = body.ticketHash;
-      room.guestTicketExpiresAt = now + TICKET_TTL_MS;
-    } else {
-      return json({ error: "Invalid role secret." }, 401);
-    }
+    const body = await request.json() as { secretHash: string; ticketHash: string };
+    const found = this.findBySecret(room, body.secretHash);
+    if (!found) return json({ error: "Invalid role secret." }, 401);
+    found.peer.ticketHash = body.ticketHash;
+    found.peer.ticketExpiresAt = Date.now() + TICKET_TTL_MS;
     await this.ctx.storage.put("room", room);
-    return json({ signal_ticket: body.ticket });
+    return json({ peer_id: found.peerId, role: found.peer.role });
+  }
+
+  /** Host-only. Closes the room to new joins for the rest of its life. */
+  private async lock(request: Request): Promise<Response> {
+    const room = await this.getLiveRoom();
+    if (!room) return json({ error: "Room not found or expired." }, 410);
+    const body = await request.json() as { secretHash: string };
+    const found = this.findBySecret(room, body.secretHash);
+    if (!found || found.peer.role !== "host") return json({ error: "Only the host may start the match." }, 401);
+    room.lockedAt = room.lockedAt ?? Date.now();
+    await this.ctx.storage.put("room", room);
+    // Returning the roster closes a race: a guest could otherwise join between
+    // the host deciding to start and the lock landing, and be left out of the
+    // match config the host is about to broadcast.
+    return json({
+      locked_at: room.lockedAt,
+      peers: Object.entries(room.peers).map(([id, peer]) => ({ peer_id: Number(id), role: peer.role })),
+    });
+  }
+
+  private async leave(request: Request): Promise<Response> {
+    const room = await this.getLiveRoom();
+    if (!room) return json({ error: "Room not found or expired." }, 410);
+    const body = await request.json() as { secretHash: string };
+    const found = this.findBySecret(room, body.secretHash);
+    if (!found) return json({ error: "Invalid role secret." }, 401);
+    if (found.peer.role === "host") {
+      this.broadcast(this.ctx.getWebSockets(), { type: "room_closed", reason: "host_left" });
+      for (const socket of this.ctx.getWebSockets()) socket.close(4003, "Host left");
+      await this.ctx.storage.deleteAll();
+      return new Response(null, { status: 204 });
+    }
+    delete room.peers[String(found.peerId)];
+    await this.ctx.storage.put("room", room);
+    for (const socket of this.peerSockets(found.peerId)) socket.close(4003, "Left the room");
+    this.announce(found.peerId, "guest", "peer_left");
+    return new Response(null, { status: 204 });
   }
 
   private async connectWebSocket(url: URL): Promise<Response> {
+    if (url.searchParams.get("v") !== String(PROTOCOL_VERSION)) {
+      return json({ error: "This game version is out of date. Please refresh the page." }, 400);
+    }
     const room = await this.getLiveRoom();
     if (!room) return json({ error: "Room not found or expired." }, 410);
     const ticketHash = await sha256(url.searchParams.get("ticket") ?? "");
     const now = Date.now();
-    let role: Role | null = null;
-    if (ticketHash === room.hostTicketHash && now <= room.hostTicketExpiresAt) role = "host";
-    if (ticketHash === room.guestTicketHash && now <= (room.guestTicketExpiresAt ?? 0)) role = "guest";
-    if (!role) return json({ error: "Invalid or expired signaling ticket." }, 401);
+    let peerId = 0;
+    let peer: PeerRecord | null = null;
+    for (const [id, candidate] of Object.entries(room.peers)) {
+      if (candidate.ticketHash === ticketHash && now <= candidate.ticketExpiresAt) {
+        peerId = Number(id);
+        peer = candidate;
+        break;
+      }
+    }
+    if (!peer) return json({ error: "Invalid or expired signaling ticket." }, 401);
+    peer.ticketExpiresAt = 0;
+    await this.ctx.storage.put("room", room);
+
     // A fresh ticket proves possession of the role secret, so this is the same
     // player returning after a dropped socket. Evict the stale one rather than
-    // rejecting the reconnect: the server may not have observed the TCP
-    // teardown yet, and a 409 here would strand the player on a dead room.
-    for (const existing of this.ctx.getWebSockets(role)) {
+    // rejecting: the room may not have observed the TCP teardown yet.
+    for (const existing of this.peerSockets(peerId)) {
       const previous = existing.deserializeAttachment() as SocketAttachment | null;
-      existing.serializeAttachment({ ...(previous ?? { role, connectedAt: now }), evicted: true });
+      existing.serializeAttachment({ ...(previous ?? { peerId, role: peer.role, connectedAt: now }), evicted: true });
       existing.close(4002, "Replaced by a reconnecting session");
     }
-    if (role === "host") room.hostTicketExpiresAt = 0;
-    else room.guestTicketExpiresAt = 0;
-    await this.ctx.storage.put("room", room);
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    this.ctx.acceptWebSocket(server, [role]);
-    server.serializeAttachment({ role, connectedAt: now } satisfies SocketAttachment);
-    if (this.ctx.getWebSockets("host").length && this.ctx.getWebSockets("guest").length) {
-      const joined = JSON.stringify({ type: "peer_joined" });
-      for (const socket of this.ctx.getWebSockets()) socket.send(joined);
-    }
+    // Tagged rather than held in a Map: the room hibernates between
+    // negotiations, and an in-memory map would not survive that.
+    this.ctx.acceptWebSocket(server, [peer.role, `peer:${peerId}`]);
+    server.serializeAttachment({ peerId, role: peer.role, connectedAt: now } satisfies SocketAttachment);
+    server.send(JSON.stringify(this.welcomeFor(room, peerId, peer.role)));
+    this.announce(peerId, peer.role, "peer_joined");
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /**
+   * Tells the connecting peer who else is here. A host that reopens signalling
+   * mid-lobby re-learns every guest in one message rather than inferring them,
+   * and guests are told only about the host, so the room leaks nothing between
+   * guests.
+   */
+  private welcomeFor(room: RoomRecord, peerId: number, role: Role): Record<string, unknown> {
+    const peers: unknown[] = [];
+    for (const [id, other] of Object.entries(room.peers)) {
+      const otherId = Number(id);
+      if (otherId === peerId) continue;
+      if (role === "guest" && other.role !== "host") continue;
+      peers.push({ peer_id: otherId, role: other.role, connected: this.peerSockets(otherId).length > 0 });
+    }
+    return {
+      type: "welcome",
+      protocol_version: PROTOCOL_VERSION,
+      peer_id: peerId,
+      role,
+      host_peer_id: HOST_PEER_ID,
+      max_peers: MAX_PEERS,
+      locked: Boolean(room.lockedAt),
+      peers,
+    };
+  }
+
+  /** A guest's arrival or departure concerns the host; the host's concerns all. */
+  private announce(peerId: number, role: Role, type: "peer_joined" | "peer_left"): void {
+    const audience = role === "guest" ? this.ctx.getWebSockets("host") : this.ctx.getWebSockets("guest");
+    this.broadcast(audience, { type, peer_id: peerId, role });
+  }
+
+  private peerSockets(peerId: number): WebSocket[] {
+    return this.ctx.getWebSockets(`peer:${peerId}`)
+      .filter((socket) => !(socket.deserializeAttachment() as SocketAttachment | null)?.evicted);
+  }
+
+  private broadcast(sockets: WebSocket[], message: unknown): void {
+    const body = JSON.stringify(message);
+    for (const socket of sockets) socket.send(body);
+  }
+
+  private findBySecret(room: RoomRecord, secretHash: string): { peerId: number; peer: PeerRecord } | null {
+    for (const [id, peer] of Object.entries(room.peers)) {
+      if (peer.secretHash === secretHash) return { peerId: Number(id), peer };
+    }
+    return null;
   }
 
   private async getLiveRoom(): Promise<RoomRecord | null> {
     const room = await this.ctx.storage.get<RoomRecord>("room");
-    if (!room || Date.now() > room.hardExpiresAt) return null;
+    // A room stored under the old two-slot schema has no peers map. Treating it
+    // as gone is correct: its clients are on the previous protocol version and
+    // are turned away at join anyway.
+    if (!room || !room.peers || Date.now() > room.hardExpiresAt) return null;
     return room;
   }
 }
